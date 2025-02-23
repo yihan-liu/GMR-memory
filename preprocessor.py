@@ -5,7 +5,7 @@ import numpy as np
 from scipy.interpolate import CloughTocher2DInterpolator
 from utils import *
 
-def process_txt_data(label: str, key_frames: list, root: str = "./dataset/raw/"):
+def load_data(label: str, rate: float=0.001, root: str="./dataset/raw/"):
     """
     Reads a TXT file where the first column represents time in seconds.
     Converts timestamps into corresponding row numbers.
@@ -14,7 +14,7 @@ def process_txt_data(label: str, key_frames: list, root: str = "./dataset/raw/")
 
     Parameters:
         label (str): A string label (e.g., "tsts" for triangle/square start/end). It is also the name for the file.
-        key_frames (list): List of timestamps in seconds.
+        rate: the rate of increase in the target, with the unit of (frequency)^-1
         root: the directory where the file is in.
 
     Returns:
@@ -23,10 +23,11 @@ def process_txt_data(label: str, key_frames: list, root: str = "./dataset/raw/")
             "y": A (t, 3) array where 1s indicate shape presence.
     """
     file_path = os.path.join(root, label + '.txt')
+    key_frames = KEY_FRAMES_DICT.get(label)
     data = np.loadtxt(file_path, skiprows=6)
     timestamps = data[:, 0]
     total_time = len(timestamps)
-    target = np.zeros((total_time, 3), dtype=int)  # (t, 3)
+    target = np.zeros((total_time, 3), dtype=float)  # (t, 3)
 
     # Define label mapping and start/end indexes(0=triangle, 1=square, 2=circle)
     shape_map = {'t': 0, 's': 1, 'c': 2}
@@ -54,10 +55,9 @@ def process_txt_data(label: str, key_frames: list, root: str = "./dataset/raw/")
                     start_idx = start_idx[0]
                     end_idx = end_idx[0]
 
-                    # Mark the time range as 1 in the corresponding column
-                    target[start_idx:end_idx+1, shape_idx] = 1 # TODO: change to cumulative placement
-                
-
+                    for k in range(start_idx, end_idx + 1):
+                        target[k, shape_idx] = (k - start_idx) * rate             
+    target = np.log1p(target)
     data = data[:, 1:]
     for i in range(data.shape[1]):
         data[:, i] -= data[0, i]
