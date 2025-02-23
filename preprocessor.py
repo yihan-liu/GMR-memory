@@ -1,190 +1,63 @@
 # preprocessor.py
 
-import copy
-
+import os
 import numpy as np
 
-from key_frames import *
-
-def get_feature_and_target(file_path: str,
-                           downsample_factor: int,
-                           intervals: dict):
+def process_txt_data(label: str, key_frames: list, root: str = "./dataset/raw/part1"):
     """
-    Loads the dataset from file_path and creates a target binary array indicating 
-    when each shape is present.
-    
-    Parameters:
-      file_path: str
-          Path to the .npy file containing the feature array.
-      intervals: dict
-          Mapping from shape index to a list of (start, end) tuples.
-          We assume column 0 is triangle, 1 is square, and 2 is circle.
-    
-    Returns:
-      dataset: dict
-          Dictionary with keys:
-            'all_features': numpy array of sensor readings.
-            'all_targets': numpy binary array of shape (total_time, 3) indicating shape presence.
-    """
-    all_features = np.load(file_path)
-    total_time = all_features.shape[-1]
-    all_features = all_features.transpose(2, 0, 1)
-
-    all_targets = np.zeros((total_time, 3), dtype=int)
-    for shape_idx, pairs in intervals.items():
-        for start, end in pairs:
-            # Mark the interval [start, end] (inclusive) as 1.
-            all_targets[start:end+1, shape_idx] = 1
-
-    all_features = all_features[::downsample_factor, :]
-    all_targets = all_targets[::downsample_factor, :]
-
-    dataset = {
-        'all_features': all_features,
-        'all_targets': all_targets
-    }
-    return dataset
-
-def get_samples(dataset: dict,
-                num_samples: int,
-                feature_length: int,
-                target_length: int):
-    """
-    Randomly samples data from a dataset.
-
-    For each sample, a random timestamp (t_random) is chosen such that there is
-    enough history to extract both a feature sample and a target sample.
-    
-    - Feature sample: Taken from dataset['all_features'][t_random - feature_length : t_random, :],
-      then transposed to shape [num_channel, feature_length].
-    - Target sample: Taken from dataset['all_targets'][t_random - target_length : t_random, :],
-      yielding shape [target_length, 3].
-    
-    Parameters:
-      dataset: dict
-          Dictionary with keys 'all_features' and 'all_targets' where:
-            - feature has shape [t, num_channel]
-            - target has shape [t, 3]
-      num_sample: int
-          Number of random samples to extract.
-      feature_length: int
-          Number of timestamps to include in each feature sample.
-      target_length: int
-          Number of timestamps to include in each target sample.
-    
-    Returns:
-      A dictionary with:
-        'features': numpy array of shape [num_sample, num_channel, feature_length]
-        'targets': numpy array of shape [num_sample, target_length, 3]
-    """
-    t = dataset['all_features'].shape[0]
-    width = dataset['all_features'].shape[1]
-    height = dataset['all_features'].shape[2]
-    num_channel = width * height
-
-    if t < target_length:
-        raise ValueError('Dataset length is less than target_length.')
-    
-    feature_samples = []
-    feature_samples_aug = []
-    feature_samples_aug_flat = []
-    target_samples = []
-
-    for _ in range(num_samples):
-
-        while True:
-            t_random = np.random.randint(target_length, t + 1)
-
-            # Extract feature sample and transpose:
-            # Original slice shape: [feature_length, num_channel] -> Transposed: [num_channel, feature_length]
-            feature_sample = dataset['all_features'][t_random - feature_length : t_random, :].T
-
-            # Extract target sample with shape [target_length, 3]
-            target_sample = dataset['all_targets'][t_random - target_length : t_random, :]
-
-            if np.any(target_sample):
-                break
-    
-        feature_sample = np.squeeze(feature_sample)
-        feature_sample_aug = sample_augment(feature_sample)  # (feature_length, height, width)
-        feature_sample_aug_flat = feature_sample_aug.reshape(num_channel, -1)
-        feature_samples.append(feature_sample)
-        feature_samples_aug.append(feature_sample_aug)
-        feature_samples_aug_flat.append(feature_sample_aug_flat)
-        target_samples.append(target_sample)
-
-    return {
-        'features': np.stack(feature_samples, axis=0),
-        'features_aug': np.stack(feature_samples_aug, axis=0),
-        'features_aug_flat': np.stack(feature_samples_aug_flat, axis=0),
-        'targets': np.stack(target_samples, axis=0)
-    }
-
-def sample_augment(frame: np.ndarray,
-                   trans_max: int = 2):
-    """
-    Apply a random spatial transformation (translation, rotation, and mirroring)
-    to the feature sample. The same transformation is applied to all frames in the sample.
+    Reads a TXT file where the first column represents time in seconds.
+    Converts timestamps into corresponding row numbers.
+    Generates a dictionary that contains both data and a (t, 3) binary array for triangle, square, and circle.
+    Ensures all rows between start and end timestamps are marked as 1.
 
     Parameters:
-        frame: np.ndarray of shape (height, width)
+        label (str): A string label (e.g., "tsts" for triangle/square start/end). It is also the name for the file.
+        key_frames (list): List of timestamps in seconds.
+        root: the directory where the file is in.
 
     Returns:
-        Augmented sample_feature of the same shape.
+        dictionary: 
+            "x": A (t, 16) array which is the processed version of the raw data
+            "y": A (t, 3) array where 1s indicate shape presence.
     """
-    trans_x = np.random.randint(-trans_max, trans_max)
-    trans_y = np.random.randint(-trans_max, trans_max)
-    flip_h = np.random.rand() > 0.5  # horizontal flip with 50% probability
-    flip_v = np.random.rand() > 0.5  # vertical flip with 50% probability
+    file_path = os.path.join(root, label + '.txt')
+    data = np.loadtxt(file_path, skiprows=6)
+    timestamps = data[:, 0]
+    total_time = len(timestamps)
+    target = np.zeros((total_time, 3), dtype=int)  # (t, 3)
 
-    augmented_frame = copy.deepcopy(frame)
-    augmented_frame = integer_translate(augmented_frame, trans_x, trans_y)
-    if flip_h:
-        augmented_frame = np.fliplr(augmented_frame)
-    if flip_v:
-        augmented_frame = np.flipud(augmented_frame)
+    # Define label mapping and start/end indexes(0=triangle, 1=square, 2=circle)
+    shape_map = {'t': 0, 's': 1, 'c': 2}
+    shape_indices = {'t': [], 's': [], 'c': []}
 
-    return augmented_frame
+    # Step 1: Identify start and end indices for each shape
+    for i, shape in enumerate(label):  
+        if shape in shape_map:
+            shape_indices[shape].append(i)
 
-def integer_translate(frame: np.ndarray, dx: int, dy: int) -> np.ndarray:
-    """
-    Translates a 2D frame by integer amounts dx and dy without wrapping.
-    Empty regions are filled with zeros.
-    
-    Parameters:
-        frame: 2D numpy array of shape (height, width)
-        dx: integer translation along the x-axis (columns). Positive shifts right.
-        dy: integer translation along the y-axis (rows). Positive shifts down.
-    
-    Returns:
-        Translated 2D frame of the same shape.
-    """
-    height, width = frame.shape
-    # Create an empty frame.
-    new_frame = np.zeros_like(frame)
-    
-    # Determine the source and destination coordinate ranges.
-    if dx >= 0:
-        src_x_start = 0
-        src_x_end = width - dx
-        dst_x_start = dx
-        dst_x_end = width
-    else:
-        src_x_start = -dx
-        src_x_end = width
-        dst_x_start = 0
-        dst_x_end = width + dx
+    # Step 2: Process each shape (triangle, square, circle)
+    for shape, indices in shape_indices.items():
+        shape_idx = shape_map[shape]  # Get corresponding column index
 
-    if dy >= 0:
-        src_y_start = 0
-        src_y_end = height - dy
-        dst_y_start = dy
-        dst_y_end = height
-    else:
-        src_y_start = -dy
-        src_y_end = height
-        dst_y_start = 0
-        dst_y_end = height + dy
+        # Ensure there are start-end pairs
+        for j in range(0, len(indices), 2):  # Step by 2 (start-end pairs)
+            if j + 1 < len(indices):  # Ensure end exists
+                start_time = key_frames[indices[j]]
+                end_time = key_frames[indices[j + 1]]
 
-    new_frame[dst_y_start:dst_y_end, dst_x_start:dst_x_end] = frame[src_y_start:src_y_end, src_x_start:src_x_end]
-    return new_frame
+                start_idx = np.argwhere(timestamps == start_time).flatten()
+                end_idx = np.argwhere(timestamps == end_time).flatten()
+
+                if len(start_idx) > 0 and len(end_idx) > 0:
+                    start_idx = start_idx[0]
+                    end_idx = end_idx[0]
+
+                    # Mark the time range as 1 in the corresponding column
+                    target[start_idx:end_idx+1, shape_idx] = 1
+
+    data = data[:, 1:]
+    for i in range(data.shape[1]):
+        data[:, i] -= data[0, i]
+    transformed = np.sign(data) * np.log1p(np.abs(data))
+
+    return {'x': transformed, 'y': target}
