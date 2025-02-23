@@ -11,7 +11,7 @@ def get_feature_and_target(file_path: str,
                            intervals: dict):
     """
     Loads the dataset from file_path and creates a target binary array indicating 
-    when each shape is present.
+    when each shape is present. 
     
     Parameters:
       file_path: str
@@ -48,9 +48,10 @@ def get_feature_and_target(file_path: str,
 def get_samples(dataset: dict,
                 num_samples: int,
                 feature_length: int,
-                target_length: int):
+                target_length: int,
+                noise_std: float = 0.5):
     """
-    Randomly samples data from a dataset.
+    Randomly samples data from a dataset and adds Gaussian noise to each feature sample.
 
     For each sample, a random timestamp (t_random) is chosen such that there is
     enough history to extract both a feature sample and a target sample.
@@ -59,23 +60,31 @@ def get_samples(dataset: dict,
       then transposed to shape [num_channel, feature_length].
     - Target sample: Taken from dataset['all_targets'][t_random - target_length : t_random, :],
       yielding shape [target_length, 3].
+
+    Additionally, Gaussian noise (with standard deviation `noise_std`) is added
+    to the extracted feature sample.
     
     Parameters:
       dataset: dict
           Dictionary with keys 'all_features' and 'all_targets' where:
-            - feature has shape [t, num_channel]
-            - target has shape [t, 3]
-      num_sample: int
+            - features have shape [t, width, height]
+            - targets have shape [t, 3]
+      num_samples: int
           Number of random samples to extract.
       feature_length: int
           Number of timestamps to include in each feature sample.
       target_length: int
           Number of timestamps to include in each target sample.
-    
+      noise_std: float
+          Standard deviation of the Gaussian noise to be added. (Default=0.5 -> 更强噪音)
+
     Returns:
       A dictionary with:
-        'features': numpy array of shape [num_sample, num_channel, feature_length]
-        'targets': numpy array of shape [num_sample, target_length, 3]
+        'features': numpy array of shape [num_samples, num_channel, feature_length]
+        'features_noisy': same shape as 'features', but with Gaussian noise
+        'features_aug': numpy array of shape [num_samples, feature_length, height, width]
+        'features_aug_flat': numpy array of shape [num_samples, num_channel, -1]
+        'targets': numpy array of shape [num_samples, target_length, 3]
     """
     t = dataset['all_features'].shape[0]
     width = dataset['all_features'].shape[1]
@@ -89,6 +98,7 @@ def get_samples(dataset: dict,
     feature_samples_aug = []
     feature_samples_aug_flat = []
     target_samples = []
+    target_samples_noisy = []
 
     for _ in range(num_samples):
 
@@ -96,29 +106,41 @@ def get_samples(dataset: dict,
             t_random = np.random.randint(target_length, t + 1)
 
             # Extract feature sample and transpose:
-            # Original slice shape: [feature_length, num_channel] -> Transposed: [num_channel, feature_length]
+            # Original slice shape: [feature_length, width, height]
+            # After .T: shape is [height, width, feature_length], 
+            # but we usually want [num_channel, feature_length].
             feature_sample = dataset['all_features'][t_random - feature_length : t_random, :].T
 
             # Extract target sample with shape [target_length, 3]
             target_sample = dataset['all_targets'][t_random - target_length : t_random, :]
 
+            # Only break if the target sample is not all zeros
             if np.any(target_sample):
                 break
-    
+
         feature_sample = np.squeeze(feature_sample)
-        feature_sample_aug = sample_augment(feature_sample)  # (feature_length, height, width)
+
+        # gaussian
+        noise = np.random.normal(loc=0.0, scale=noise_std, size=target_sample.shape)
+        target_sample_noisy = target_sample + noise
+
+        feature_sample_aug = sample_augment(feature_sample)  # shape: (feature_length, height, width)
         feature_sample_aug_flat = feature_sample_aug.reshape(num_channel, -1)
+
         feature_samples.append(feature_sample)
         feature_samples_aug.append(feature_sample_aug)
         feature_samples_aug_flat.append(feature_sample_aug_flat)
         target_samples.append(target_sample)
+        target_samples_noisy.append(target_sample_noisy)
 
     return {
-        'features': np.stack(feature_samples, axis=0),
+        'features': np.stack(feature_samples, axis=0),         
         'features_aug': np.stack(feature_samples_aug, axis=0),
         'features_aug_flat': np.stack(feature_samples_aug_flat, axis=0),
-        'targets': np.stack(target_samples, axis=0)
+        'targets': np.stack(target_samples, axis=0),
+        'target_noisy': np.stack(target_samples_noisy, axis=0) 
     }
+
 
 def sample_augment(frame: np.ndarray,
                    trans_max: int = 2):
