@@ -104,8 +104,32 @@ def interpolate(data):
 
 
 def get_samples(dataset: list, downsample_factor: int, num_samples: int, memory_length: int):
+
     """
+    Generates a specified number of randomized samples from the given dataset, where each sample includes a 
+    feature snapshot at a randomly chosen timepoint, and the corresponding sequence of historical target labels.
+
+    Parameters:
+        dataset (list): 
+            A dictionary containing:
+                - 'x': numpy array of shape (T, 8, 6), the interpolated features.
+                - 'y': numpy array of shape (T, 3), the corresponding target labels indicating the presence of triangle, square, or circle.
+        downsample_factor (int): 
+            Factor by which the dataset's temporal resolution is reduced. Higher factors reduce data frequency.
+        num_samples (int): 
+            Number of random samples to generate from the dataset.
+        memory_length (int): 
+            Number of previous timesteps included in each target sample.
+
+    Returns:
+        tuple: A tuple containing:
+            - features (numpy.ndarray): Array of shape (num_samples, 8, 6), each entry representing a feature snapshot at a random timepoint.
+            - targets (numpy.ndarray): Array of shape (num_samples, memory_length, 3), each entry representing historical target labels leading up to that timepoint.
+
+    Note:
+        The function ensures each sample's target history contains at least one positive (non-zero) label.
     """
+
     all_features = dataset['x']  
     all_targets = dataset['y']
     all_features = all_features[::downsample_factor, :]
