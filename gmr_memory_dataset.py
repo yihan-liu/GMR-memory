@@ -3,6 +3,7 @@
 import os
 import numpy as np
 from scipy.interpolate import CloughTocher2DInterpolator
+from scipy.interpolate import RegularGridInterpolator
 import torch
 from torch.utils.data import Dataset
 from utils import *
@@ -120,6 +121,93 @@ class GMRMemoryDataset(Dataset):
             interp_results.append(Z)
         self.data_interp = np.stack(interp_results, axis=0)  # Shape: (total_time, 6, 8)
 
+    def augment(self,
+                feature_sample,
+                mirror_prob=0.5,
+                noise_mean=0.0,
+                noise_std=0.8,
+                random_low=0.0,
+                random_high=1.0):
+        """
+        Apply data augmentation to a single feature sample via mirroring, noise, and
+        a smoothly varying offset. Specifically:
+        
+        1. **Mirror**:
+        - With probability `mirror_prob`, the input is flipped left-to-right.
+        - If `feature_sample` is 2D (height x width), `np.fliplr` is used.
+        - If `feature_sample` is 3D (e.g., time x height x width),
+            it is flipped along `axis=2`.
+        
+        2. **Gaussian Noise**:
+        - After the optional flip, Gaussian noise is added to each element.
+        - Noise is drawn from a normal distribution with mean `noise_mean` and
+            standard deviation `noise_std`.
+        
+        3. **Baseline shift**:
+        - Two random values (p1 and p2) are sampled from a uniform distribution
+            in the range [random_low, random_high].
+        - Two additional values (p3, p4) are computed as the average of `p1` and `p2`.
+        - These four corner values (p1, p3, p4, p2) define a small “height map”
+        for the corners of the grid (shape: [0,6] x [0,8]).
+        - The RegularGridInterpolator is then used to interpolate a per-pixel offset
+        across the 2D grid.
+        - This offset is added to the feature sample, creating a smoothly varying
+        deformation.
+        
+        Parameters
+        ----------
+        feature_sample : numpy.ndarray
+            The feature map or volume to be augmented.
+        mirror_prob : float, optional
+            Probability of applying the horizontal flip. Default is 0.5.
+        noise_mean : float, optional
+            Mean of the Gaussian noise. Default is 0.0.
+        noise_std : float, optional
+            Standard deviation of the Gaussian noise. Default is 0.8.
+        random_low : float, optional
+            Lower bound for the random values used in corner interpolation. Default is 0.0.
+        random_high : float, optional
+            Upper bound for the random values used in corner interpolation. Default is 1.0.
+        
+        Returns
+        -------
+        numpy.ndarray
+        The augmented feature sample, with the same shape as the input.
+        """
+        if np.random.rand() < mirror_prob:
+            if feature_sample.ndim == 2:
+                return np.fliplr(feature_sample)
+            elif feature_sample.ndim == 3:
+                return np.flip(feature_sample, axis=2)
+            else:
+                raise ValueError("Unsupported data dimensions for mirror transformation")
+
+        gauss_noise = np.random.normal(loc=noise_mean, scale=noise_std, size=feature_sample.shape)
+        feature_sample = feature_sample + gauss_noise
+
+        p1 = np.random.uniform(random_low, random_high)
+        p2 = np.random.uniform(random_low, random_high)
+        p3 = p4 = (p1 + p2) / 2.0
+
+        x = np.array([0, 6])
+        y = np.array([0, 8])
+
+        corner_data = np.array([
+        [p1, p3],
+        [p4, p2]
+        ])
+
+        interp = RegularGridInterpolator((x, y), corner_data, bounds_error=False, fill_value=None)
+        xx = np.arange(6)
+        yy = np.arange(8)
+        X, Y = np.meshgrid(xx, yy, indexing='ij')  # (6,8)
+        points = np.stack((X, Y), axis=-1)
+        offset = interp(points)
+        feature_sample = feature_sample + offset
+
+        return feature_sample
+
+
     def generate_samples(self, 
                          downsample_factor: int, 
                          num_samples: int, 
@@ -155,6 +243,7 @@ class GMRMemoryDataset(Dataset):
                 target_sample = downsampled_targets[t_random - memory_length:t_random, ...]
                 if np.any(target_sample):
                     break
+
             feature_sample_list.append(feature_sample)
             target_sample_list.append(target_sample)
         self.feature_samples = np.stack(feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
