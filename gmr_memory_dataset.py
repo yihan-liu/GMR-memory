@@ -35,9 +35,32 @@ class GMRMemoryDataset(Dataset):
             rate (float): Rate at which target values increase between keyframes.
             root (str): Directory where the raw TXT file is located.
         """
+        self.feature_samples, self.target_samples = None, None
+        
         self.load_data(label, cumulation_rate, root)
-        self.interpolate()
+        self.feature_interpolate()
         self.generate_samples(downsample_factor, num_samples, memory_length)
+
+    def __len__(self):
+        """Returns the number of samples."""
+        return len(self.feature_samples)
+
+    def __getitem__(self, index):
+        """
+        Retrieves the feature sample and corresponding target sequence at the given index,
+        converting them into PyTorch tensors.
+
+        Parameters:
+            index (int): Index of the desired sample.
+
+        Returns:
+            dictionary: {feature, target}
+                - feature: Tensor of shape (6, 8)
+                - target: Tensor of shape (memory_length, 3)
+        """
+        feature = torch.tensor(self.feature_samples[index], dtype=torch.float32)
+        target = torch.tensor(self.target_samples[index], dtype=torch.float32)
+        return {'feature': feature, 'target': target}
 
     def load_data(self, 
                   label: str, 
@@ -101,12 +124,12 @@ class GMRMemoryDataset(Dataset):
         # Apply a signed logarithmic transformation.
         self.data_norm = np.sign(self.data) * np.log1p(np.abs(self.data))
 
-    def interpolate(self):
+    def feature_interpolate(self):
         """
         Interpolates the transformed sensor data onto an 8x6 grid using the Clough-Tocher method.
 
         This method reads from self.data_norm (set in load_data) and creates an interpolated
-        array stored in self.interpolated.
+        array stored in self.data_interp.
         """
         x = KNOWN_CHANNELS[:, 0]
         y = KNOWN_CHANNELS[:, 1]
@@ -121,13 +144,13 @@ class GMRMemoryDataset(Dataset):
             interp_results.append(Z)
         self.data_interp = np.stack(interp_results, axis=0)  # Shape: (total_time, 6, 8)
 
-    def augment(self,
-                feature_sample,
-                mirror_prob=0.5,
-                noise_mean=0.0,
-                noise_std=0.8,
-                random_low=0.0,
-                random_high=1.0):
+    @staticmethod
+    def feature_augment(feature_sample,
+                        mirror_prob=0.5,
+                        noise_mean=0.0,
+                        noise_std=0.8,
+                        random_low=0.0,
+                        random_high=1.0):
         """
         Apply data augmentation to a single feature sample via mirroring, noise, and
         a smoothly varying offset. Specifically:
@@ -154,26 +177,18 @@ class GMRMemoryDataset(Dataset):
         - This offset is added to the feature sample, creating a smoothly varying
         deformation.
         
-        Parameters
-        ----------
-        feature_sample : numpy.ndarray
-            The feature map or volume to be augmented.
-        mirror_prob : float, optional
-            Probability of applying the horizontal flip. Default is 0.5.
-        noise_mean : float, optional
-            Mean of the Gaussian noise. Default is 0.0.
-        noise_std : float, optional
-            Standard deviation of the Gaussian noise. Default is 0.8.
-        random_low : float, optional
-            Lower bound for the random values used in corner interpolation. Default is 0.0.
-        random_high : float, optional
-            Upper bound for the random values used in corner interpolation. Default is 1.0.
+        Parameters:
+          - feature_sample (numpy.ndarray): The feature map or volume to be augmented.
+          - mirror_prob (float, optional): Probability of applying the horizontal flip. Default is 0.5.
+          - noise_mean (float, optional): Mean of the Gaussian noise. Default is 0.0.
+          - noise_std (float, optional): Standard deviation of the Gaussian noise. Default is 0.8.
+          - random_low (float, optional): Lower bound for the random values used in corner interpolation. Default is 0.0.
+          - random_high (float, optional): Upper bound for the random values used in corner interpolation. Default is 1.0.
         
-        Returns
-        -------
-        numpy.ndarray
-        The augmented feature sample, with the same shape as the input.
+        Returns:
+          - numpy.ndarray: The augmented feature sample, with the same shape as the input.
         """
+        # Add random mirror
         if np.random.rand() < mirror_prob:
             if feature_sample.ndim == 2:
                 return np.fliplr(feature_sample)
@@ -181,32 +196,27 @@ class GMRMemoryDataset(Dataset):
                 return np.flip(feature_sample, axis=2)
             else:
                 raise ValueError("Unsupported data dimensions for mirror transformation")
-
+        
+        # Add noise
         gauss_noise = np.random.normal(loc=noise_mean, scale=noise_std, size=feature_sample.shape)
         feature_sample = feature_sample + gauss_noise
 
+        # Add base plane offset
         p1 = np.random.uniform(random_low, random_high)
         p2 = np.random.uniform(random_low, random_high)
         p3 = p4 = (p1 + p2) / 2.0
-
-        x = np.array([0, 6])
-        y = np.array([0, 8])
-
         corner_data = np.array([
-        [p1, p3],
-        [p4, p2]
+            [p1, p3],
+            [p4, p2]
         ])
-
-        interp = RegularGridInterpolator((x, y), corner_data, bounds_error=False, fill_value=None)
+        interp = RegularGridInterpolator(([0, 6], [0, 8]), corner_data, bounds_error=False, fill_value=None)
         xx = np.arange(6)
         yy = np.arange(8)
         X, Y = np.meshgrid(xx, yy, indexing='ij')  # (6,8)
         points = np.stack((X, Y), axis=-1)
         offset = interp(points)
         feature_sample = feature_sample + offset
-
         return feature_sample
-
 
     def generate_samples(self, 
                          downsample_factor: int, 
@@ -249,23 +259,3 @@ class GMRMemoryDataset(Dataset):
         self.feature_samples = np.stack(feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
         self.target_samples = np.stack(target_sample_list, axis=0)      # Shape: (num_samples, memory_length, 3)
 
-    def __len__(self):
-        """Returns the number of samples."""
-        return len(self.feature_samples)
-
-    def __getitem__(self, index):
-        """
-        Retrieves the feature sample and corresponding target sequence at the given index,
-        converting them into PyTorch tensors.
-
-        Parameters:
-            index (int): Index of the desired sample.
-
-        Returns:
-            dictionary: {feature, target}
-                - feature: Tensor of shape (6, 8)
-                - target: Tensor of shape (memory_length, 3)
-        """
-        feature = torch.tensor(self.feature_samples[index], dtype=torch.float32)
-        target = torch.tensor(self.target_samples[index], dtype=torch.float32)
-        return {'feature': feature, 'target': target}
