@@ -12,6 +12,7 @@ class GMRMemoryDataset(Dataset):
     def __init__(self, 
                  label: str, 
                  num_samples: int,
+                 run_augment: bool=True,
                  downsample_factor: int=1, 
                  memory_length: int=1,
                  cumulation_rate: float=0.001,
@@ -29,14 +30,16 @@ class GMRMemoryDataset(Dataset):
 
         Parameters:
             label (str): Used for both the filename and the keyframe order (e.g., "tsc").
-            downsample_factor (int): Factor by which to reduce temporal resolution.
             num_samples (int): Number of random samples to generate.
-            memory_length (int): Number of previous timesteps included in each target sequence.
-            rate (float): Rate at which target values increase between keyframes.
-            root (str): Directory where the raw TXT file is located.
+            run_augment (bool, optional): Decide if augment is needed, default to True.
+            downsample_factor (int, optional): Factor by which to reduce temporal resolution.
+            memory_length (int, optional): Number of previous timesteps included in each target sequence.
+            rate (float, optional): Rate at which target values increase between keyframes.
+            root (str, optional): Directory where the raw TXT file is located.
         """
         self.feature_samples, self.target_samples = None, None
-        
+        self.run_augment = run_augment
+
         self.load_data(label, cumulation_rate, root)
         self.feature_interpolate()
         self.generate_samples(downsample_factor, num_samples, memory_length)
@@ -253,7 +256,8 @@ class GMRMemoryDataset(Dataset):
                 target_sample = downsampled_targets[t_random - memory_length:t_random, ...]
                 if np.any(target_sample):
                     break
-
+            if self.run_augment:
+                feature_sample = self.feature_augment(feature_sample)
             feature_sample_list.append(feature_sample)
             target_sample_list.append(target_sample)
         self.feature_samples = np.stack(feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
