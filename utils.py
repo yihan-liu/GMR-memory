@@ -22,4 +22,10 @@ KEY_FRAMES_DICT = {'cscs': [3.5, 58.75, 96.25, 142.75],
                    'sccs': [4, 40, 70.5, 121.5],
                    'tcssct': [1.15, 45.05, 79.45, 120, 160.3, 193.2]}
 
-
+def r2(y_true: np.ndarray, y_pred: np.ndarray):
+    """
+    Compute the coefficient of determination R^2.
+    """
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    return 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
