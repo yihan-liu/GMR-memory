@@ -15,7 +15,7 @@ class GMRMemoryDataset(Dataset):
                  downsample_factor: int=1, 
                  memory_length: int=1,
                  cumulation_rate: float=0.001,
-                 root: str="./dataset/raw/"):
+                 root: str='./dataset/'):
         """
         Initializes the dataset by loading the raw data, processing it, and generating samples.
 
