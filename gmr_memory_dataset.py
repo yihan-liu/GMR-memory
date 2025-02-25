@@ -11,9 +11,9 @@ from utils import *
 class GMRMemoryDataset(Dataset):
     def __init__(self, 
                  label: str, 
-                 downsample_factor: int, 
-                 num_samples: int, 
-                 memory_length: int,
+                 num_samples: int,
+                 downsample_factor: int=1, 
+                 memory_length: int=1,
                  cumulation_rate: float=0.001,
                  root: str="./dataset/raw/"):
         """
