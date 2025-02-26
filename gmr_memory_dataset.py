@@ -163,11 +163,11 @@ class GMRMemoryDataset(Dataset):
 
     @staticmethod
     def feature_augment(feature_sample,
-                        mirror_prob=0.2,
+                        mirror_prob=0.3,
                         noise_mean=0.0,
-                        noise_std=0.2,
-                        random_low=-0.1,
-                        random_high=0.2):
+                        noise_std=0.25,
+                        random_low=-0.5,
+                        random_high=0.5):
         """
         Apply data augmentation to a single feature sample via mirroring, noise, and
         a smoothly varying offset. Specifically:
@@ -205,18 +205,20 @@ class GMRMemoryDataset(Dataset):
         Returns:
           - numpy.ndarray: The augmented feature sample, with the same shape as the input.
         """
+        sample = copy.deepcopy(feature_sample)
+
         # Add random mirror
         if np.random.rand() < mirror_prob:
-            if feature_sample.ndim == 2:
-                return np.fliplr(feature_sample)
-            elif feature_sample.ndim == 3:
-                return np.flip(feature_sample, axis=2)
+            if sample.ndim == 2:
+                sample = np.fliplr(sample)
+            elif sample.ndim == 3:
+                sample = np.flip(sample, axis=2)
             else:
                 raise ValueError("Unsupported data dimensions for mirror transformation")
         
         # Add noise
-        gauss_noise = np.random.normal(loc=noise_mean, scale=noise_std, size=feature_sample.shape)
-        feature_sample = feature_sample + gauss_noise
+        gaussian_noise = np.random.normal(loc=noise_mean, scale=noise_std, size=sample.shape)
+        sample = sample + gaussian_noise
 
         # Add base plane offset
         p1 = np.random.uniform(random_low, random_high)
@@ -235,8 +237,10 @@ class GMRMemoryDataset(Dataset):
         X, Y = np.meshgrid(xx, yy, indexing='ij')  # (6,8)
         points = np.stack((X, Y), axis=-1)
         offset = interp(points)
-        feature_sample = feature_sample + offset
-        return feature_sample
+        sample = sample + offset
+        return {'feature_sample': sample,
+                'gaussian': gaussian_noise,
+                'offset': offset}
 
     def generate_samples(self, 
                          downsample_factor: int, 
@@ -267,7 +271,8 @@ class GMRMemoryDataset(Dataset):
         feature_sample_list = []
         target_sample_list = []
         original_feature_sample_list = []
-        original_target_sample_list = []
+        gaussian_sample_list = []
+        offset_sample_list = []
         for _ in range(num_samples):
             while True:
                 t_random = np.random.randint(memory_length, total_downsampled)
@@ -276,15 +281,28 @@ class GMRMemoryDataset(Dataset):
                 if np.any(target_sample):
                     break
             original_feature_sample_list.append(feature_sample)
-            original_target_sample_list.append(target_sample)
             if self.run_augment:
-                feature_sample = self.feature_augment(feature_sample)
+                feature_sample_dict = self.feature_augment(feature_sample)
+                feature_sample = feature_sample_dict.get('feature_sample')
+                gaussian_sample = feature_sample_dict.get('gaussian')
+                offset_sample = feature_sample_dict.get('offset')
+
+                gaussian_sample_list.append(gaussian_sample)
+                offset_sample_list.append(offset_sample)
+            
             feature_sample_list.append(feature_sample)
             target_sample_list.append(target_sample)
         self.feature_samples = np.stack(feature_sample_list, axis=0)                        # Shape: (num_samples, 6, 8)
         self.target_samples = np.stack(target_sample_list, axis=0)                          # Shape: (num_samples, memory_length, 3)
-        self.original_feature_samples = np.stack(original_feature_sample_list, axis=0)      # Shape: (num_samples, 6, 8)
-        self.original_target_samples = np.stack(original_target_sample_list, axis=0)        # Shape: (num_samples, memory_length, 3)
+        
+        # for evaluation
+        if self.run_augment:
+            self.original_feature_samples = np.stack(original_feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
+            self.gaussian_feature_samples = np.stack(gaussian_sample_list, axis=0)
+            self.offset_feature_samples = np.stack(offset_sample_list, axis=0)
 
     def get_original_samples(self):
-        return {'features': self.original_feature_samples, 'targets': self.original_target_samples}
+        return {'features': self.original_feature_samples, 'targets': self.target_samples}  # Use "augmented" targets as they are unchanged
+    
+    def get_augment_tool_samples(self):
+        return {'gaussian': self.gaussian_feature_samples, 'offset': self.offset_feature_samples}
