@@ -15,63 +15,49 @@ from model import GMRMemoryModel
 from utils import *
 
 def train(args):
-    all_labels = list(KEY_FRAMES_DICT.keys())
+    labels = list(KEY_FRAMES_DICT.keys())
+    print(f'Using labels: {labels}')
 
-    # randomly reserve one label for the test set
-    test_label = random.choice(all_labels)
-    print(f'Reserved test label: {test_label}')
+    num_labels = len(labels)
+    samples_per_label = args.num_total_samples // num_labels
+    print(f'Allocating {samples_per_label} samples per label (Total: {samples_per_label * num_labels})')
 
-    train_labels = [label for label in all_labels if label != test_label]
-    num_train_labels = len(all_labels)
-    samples_per_label = args.num_total_samples // num_train_labels
-    print(f'Training labels: {train_labels}')
-    print(f'Allocating {samples_per_label} samples per label (Total: {samples_per_label * num_train_labels})')
+    # combine all datasets
+    datasets = []
+    for label in labels:
+        dataset = GMRMemoryDataset(
+            label=label,
+            num_samples=samples_per_label,
+            run_augment=True,
+            cumulation_rate=args.cumulation_rate,
+            root=args.root
+        )
+        datasets.append(dataset)
+    combined_dataset = ConcatDataset(datasets)
 
-    # create training datasets
-    train_datasets = []
-    for label in train_labels:
-        dataset = GMRMemoryDataset(label=label,
-                                   num_samples=samples_per_label,
-                                   run_augment=True,
-                                   cumulation_rate=args.cumulation_rate,
-                                   root=args.root)
-        train_datasets.append(dataset)
-    combined_train_dataset = ConcatDataset(train_datasets)
-
-    total_size = len(combined_train_dataset)
+    total_size = len(combined_dataset)
     train_ratio = 0.8
     train_size = int(train_ratio * total_size)
     validate_size = total_size - train_size
-    train_dataset, validate_dataset = random_split(combined_train_dataset, [train_size, validate_size])
+    train_dataset, validate_dataset = random_split(combined_dataset, [train_size, validate_size])
     print(f'Train samples: {train_size}, Validate samples: {validate_size}')
 
     batch_size = args.batch_size
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     validate_loader = DataLoader(validate_dataset, batch_size=batch_size, shuffle=False)
 
-    # create test datasets
-    test_dataset = GMRMemoryDataset(label=test_label,
-                                    num_samples=samples_per_label,
-                                    run_augment=False,
-                                    cumulation_rate=args.cumulation_rate,
-                                    root=args.root)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = GMRMemoryModel().to(device)
-    print(sum(p.numel() for p in model.parameters()))
+    print("Total model parameters:", sum(p.numel() for p in model.parameters()))
+    print(model)
 
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-
-    print(model)
 
     train_losses = []
     train_r2s = []
     val_losses = []
     val_r2s = []
-    test_losses = []
-    test_r2s = []
 
     # Training loop
     for epoch in tqdm(range(1, args.num_epochs + 1), desc='Training epochs'):
@@ -79,8 +65,6 @@ def train(args):
         epoch_train_loss = 0.0
         epoch_train_r2 = 0.0
         total_train = 0
-
-        # Lists to store predictions and targets for R^2 computation.
         train_preds = []
         train_targets = []
 
@@ -100,9 +84,9 @@ def train(args):
             loss.backward()
             optimizer.step()
 
-            batch_size = features.size(0)
-            epoch_train_loss += loss.item() * batch_size
-            total_train += batch_size
+            current_batch_size = features.size(0)
+            epoch_train_loss += loss.item() * current_batch_size
+            total_train += current_batch_size
 
             train_preds.append(outputs.detach().cpu().numpy())
             train_targets.append(targets.detach().cpu().numpy())
@@ -123,7 +107,6 @@ def train(args):
         epoch_val_loss = 0.0
         epoch_val_r2 = 0.0
         total_val = 0
-
         val_preds = []
         val_targets = []
 
@@ -135,9 +118,9 @@ def train(args):
                 outputs = model(features)
                 loss = criterion(outputs, targets)
 
-                batch_size = features.size(0)
-                epoch_val_loss += loss.item() * batch_size
-                total_val += batch_size
+                current_batch_size = features.size(0)
+                epoch_val_loss += loss.item() * current_batch_size
+                total_val += current_batch_size
 
                 val_preds.append(outputs.cpu().numpy())
                 val_targets.append(targets.cpu().numpy())
@@ -153,46 +136,12 @@ def train(args):
         val_losses.append(epoch_val_loss)
         val_r2s.append(epoch_val_r2)
 
-        epoch_test_loss = 0.0
-        epoch_test_r2 = 0.0
-        total_test = 0
-
-        test_preds = []
-        test_targets = []
-
-        with torch.no_grad():
-            for batch in test_loader:
-                features = batch['feature'].to(device)
-                targets = batch['target'].to(device)
-                targets = targets[:, -1, :].unsqueeze(2)
-                outputs = model(features)
-                loss = criterion(outputs, targets)
-
-                batch_size = features.size(0)
-                epoch_test_loss += loss.item() * batch_size
-                total_test += batch_size
-
-                test_preds.append(outputs.cpu().numpy())
-                test_targets.append(targets.cpu().numpy())
-        
-        # epoch test loss
-        epoch_test_loss /= total_test
-        
-        # epoch test r2
-        test_preds = np.concatenate(test_preds, axis=0).flatten()
-        test_targets = np.concatenate(test_targets, axis=0).flatten()
-        epoch_test_r2 = r2(test_targets, test_preds)
-
-        test_losses.append(epoch_test_loss)
-        test_r2s.append(epoch_test_r2)
-
         # Every 10 epochs (and at the final epoch), print progress using tqdm.write
         if epoch % 5 == 0 or epoch == args.num_epochs:
             tqdm.write(
                 f'Epoch {epoch}/{args.num_epochs}: '
                 f'Train Loss: {epoch_train_loss:.4f}, Train R2: {epoch_train_r2:.4f}, '
-                f'Validate Loss: {epoch_val_loss:.4f}, Validate R2: {epoch_val_r2:.4f}, '
-                f'Test Loss: {epoch_test_loss:.4f}, Test R2: {epoch_test_r2:.4f}'
+                f'Validate Loss: {epoch_val_loss:.4f}, Validate R2: {epoch_val_r2:.4f}'
             )
 
 if __name__ == '__main__':
