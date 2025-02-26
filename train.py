@@ -23,7 +23,7 @@ def train(args):
     print(f'Allocating {samples_per_label} samples per label (Total: {samples_per_label * num_labels})')
 
     # combine all datasets
-    datasets = []
+    train_datasets = []
     for label in labels:
         dataset = GMRMemoryDataset(
             label=label,
@@ -32,19 +32,32 @@ def train(args):
             cumulation_rate=args.cumulation_rate,
             root=args.root
         )
-        datasets.append(dataset)
-    combined_dataset = ConcatDataset(datasets)
+        train_datasets.append(dataset)
+    combined_train_dataset = ConcatDataset(train_datasets)
 
-    total_size = len(combined_dataset)
-    train_ratio = 0.8
-    train_size = int(train_ratio * total_size)
-    validate_size = total_size - train_size
-    train_dataset, validate_dataset = random_split(combined_dataset, [train_size, validate_size])
-    print(f'Train samples: {train_size}, Validate samples: {validate_size}')
+    validate_datasets = []
+    for label in labels:
+        dataset = GMRMemoryDataset(
+            label=label,
+            num_samples=samples_per_label // 10,
+            run_augment=False,
+            cumulation_rate=args.cumulation_rate,
+            root=args.root
+        )
+        validate_datasets.append(dataset)
+    combined_validate_dataset = ConcatDataset(validate_datasets)
+
+    # total_size = len(combined_dataset)
+    # train_ratio = 0.8
+    # train_size = int(train_ratio * total_size)
+    # validate_size = total_size - train_size
+    # train_dataset, validate_dataset = random_split(combined_dataset, [train_size, validate_size])
+    # print(f'Train samples: {train_size}, Validate samples: {validate_size}')
+    print(f'Train samples: {len(combined_train_dataset)}, Validate samples: {combined_validate_dataset}')
 
     batch_size = args.batch_size
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    validate_loader = DataLoader(validate_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(combined_train_dataset, batch_size=batch_size, shuffle=True)
+    validate_loader = DataLoader(combined_validate_dataset, batch_size=batch_size, shuffle=False)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = GMRMemoryModel().to(device)
@@ -52,7 +65,7 @@ def train(args):
     print(model)
 
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 
     train_losses = []
     train_r2s = []
