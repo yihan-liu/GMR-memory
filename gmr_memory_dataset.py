@@ -10,13 +10,19 @@ from utils import *
 
 class GMRMemoryDataset(Dataset):
     def __init__(self, 
-                 label: str, 
-                 num_samples: int,
+                 label: str,
+                 root: str='./dataset/',
+                 num_samples: int=1000,
                  run_augment: bool=True,
+                 mirror_prob: float=0.2,
+                 noise_mean: float=0.0,
+                 noise_std: float=0.2,
+                 random_low: float=0.0,
+                 random_high: float=0.2,
                  downsample_factor: int=1, 
                  memory_length: int=1,
                  cumulation_rate: float=0.001,
-                 root: str='./dataset/'):
+                 ):
         """
         Initializes the dataset by loading the raw data, processing it, and generating samples.
 
@@ -30,15 +36,21 @@ class GMRMemoryDataset(Dataset):
 
         Parameters:
             label (str): Used for both the filename and the keyframe order (e.g., "tsc").
-            num_samples (int): Number of random samples to generate.
+            root (str, optional): Directory where the raw TXT file is located.
+            num_samples (int, optional): Number of random samples to generate.
             run_augment (bool, optional): Decide if augment is needed, default to True.
+            mirror_prob (float, optional): Probability of mirroring, default to 0.2,
+            noise_mean (float. optional): Mean value of gaussian noise, default to 0.0,
+            noise_std (float, optional): Standard deviation of gaussian noise, default to 0.2,
+            random_low (float, optional): Lowest corner point of the base plane offset, default to 0.0,
+            random_high: (float, optional): Highest corner point of the base plane offset, default to 0.2,
             downsample_factor (int, optional): Factor by which to reduce temporal resolution.
             memory_length (int, optional): Number of previous timesteps included in each target sequence.
-            rate (float, optional): Rate at which target values increase between keyframes.
-            root (str, optional): Directory where the raw TXT file is located.
+            cumulation_rate (float, optional): Rate at which target values increase between keyframes.
         """
         self.feature_samples, self.target_samples = None, None
         self.run_augment = run_augment
+        # TODO: Add data augment parameters
 
         self.load_data(label, cumulation_rate, root)
         self.feature_interpolate()
@@ -149,11 +161,11 @@ class GMRMemoryDataset(Dataset):
 
     @staticmethod
     def feature_augment(feature_sample,
-                        mirror_prob=0.5,
+                        mirror_prob=0.2,
                         noise_mean=0.0,
-                        noise_std=0.8,
-                        random_low=0.0,
-                        random_high=1.0):
+                        noise_std=0.2,
+                        random_low=-0.1,
+                        random_high=0.2):
         """
         Apply data augmentation to a single feature sample via mirroring, noise, and
         a smoothly varying offset. Specifically:
