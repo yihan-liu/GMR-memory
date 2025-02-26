@@ -1,6 +1,8 @@
 # gmr_memory_dataset.py
 
 import os
+import copy
+
 import numpy as np
 from scipy.interpolate import CloughTocher2DInterpolator
 from scipy.interpolate import RegularGridInterpolator
@@ -219,11 +221,14 @@ class GMRMemoryDataset(Dataset):
         # Add base plane offset
         p1 = np.random.uniform(random_low, random_high)
         p2 = np.random.uniform(random_low, random_high)
-        p3 = p4 = (p1 + p2) / 2.0
+        pm = (p1 + p2) / 2.0
         corner_data = np.array([
-            [p1, p3],
-            [p4, p2]
+            [p1, pm],
+            [pm, p2]
         ])
+        k = np.random.randint(0, 4)
+        corner_data = np.rot90(corner_data, k)
+
         interp = RegularGridInterpolator(([0, 6], [0, 8]), corner_data, bounds_error=False, fill_value=None)
         xx = np.arange(6)
         yy = np.arange(8)
@@ -261,6 +266,8 @@ class GMRMemoryDataset(Dataset):
 
         feature_sample_list = []
         target_sample_list = []
+        original_feature_sample_list = []
+        original_target_sample_list = []
         for _ in range(num_samples):
             while True:
                 t_random = np.random.randint(memory_length, total_downsampled)
@@ -268,10 +275,16 @@ class GMRMemoryDataset(Dataset):
                 target_sample = downsampled_targets[t_random - memory_length:t_random, ...]
                 if np.any(target_sample):
                     break
+            original_feature_sample_list.append(feature_sample)
+            original_target_sample_list.append(target_sample)
             if self.run_augment:
                 feature_sample = self.feature_augment(feature_sample)
             feature_sample_list.append(feature_sample)
             target_sample_list.append(target_sample)
-        self.feature_samples = np.stack(feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
-        self.target_samples = np.stack(target_sample_list, axis=0)      # Shape: (num_samples, memory_length, 3)
+        self.feature_samples = np.stack(feature_sample_list, axis=0)                        # Shape: (num_samples, 6, 8)
+        self.target_samples = np.stack(target_sample_list, axis=0)                          # Shape: (num_samples, memory_length, 3)
+        self.original_feature_samples = np.stack(original_feature_sample_list, axis=0)      # Shape: (num_samples, 6, 8)
+        self.original_target_samples = np.stack(original_target_sample_list, axis=0)        # Shape: (num_samples, memory_length, 3)
 
+    def get_original_samples(self):
+        return {'features': self.original_feature_samples, 'targets': self.original_target_samples}
