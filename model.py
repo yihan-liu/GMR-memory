@@ -27,7 +27,7 @@ class GMRMemoryModel(nn.Module):
 
         # Flatten and pass through fully connect layers.
         self.fc1 = nn.Linear(32 * 1 * 2, 64)
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=0.1)
         self.fc2 = nn.Linear(64, 3)  # final output: [3, 1]
 
     def forward(self, x: torch.Tensor):
