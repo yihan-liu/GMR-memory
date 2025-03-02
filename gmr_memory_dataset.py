@@ -103,8 +103,9 @@ class GMRMemoryDataset(Dataset):
             root (str): Directory containing the raw data file.
         """
         file_path = os.path.join(root, label + '.txt')
-        raw = np.loadtxt(file_path)  # Assumes first column is time
-        timestamps = raw[:, 0] - raw[0, 0]
+        raw = np.loadtxt(file_path, skiprows=0)  # Assumes first column is time
+        timestamp_offset = raw[0, 0]
+        timestamps = raw[:, 0] - timestamp_offset
         total_time = len(timestamps)
 
         # Initialize target with zeros for three shapes (triangle, square, circle)
@@ -112,6 +113,7 @@ class GMRMemoryDataset(Dataset):
         key_frames = KEY_FRAMES_DICT.get(label)
         if key_frames is None:
             raise ValueError(f"Key frames for label '{label}' not found in KEY_FRAMES_DICT.")
+        key_frames = [kf - timestamp_offset for kf in key_frames]  # offset adjustment
 
         # Mapping for shape characters to target columns.
         shape_map = {'t': 0, 's': 1, 'c': 2}
