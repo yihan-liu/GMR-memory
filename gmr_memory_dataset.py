@@ -103,8 +103,8 @@ class GMRMemoryDataset(Dataset):
             root (str): Directory containing the raw data file.
         """
         file_path = os.path.join(root, label + '.txt')
-        raw = np.loadtxt(file_path, skiprows=6)  # Assumes first column is time
-        timestamps = raw[:, 0]
+        raw = np.loadtxt(file_path)  # Assumes first column is time
+        timestamps = raw[:, 0] - raw[0, 0]
         total_time = len(timestamps)
 
         # Initialize target with zeros for three shapes (triangle, square, circle)
