@@ -37,22 +37,26 @@ class GMRMemoryDataset(Dataset):
           - self.target_samples: Final target sequences for training.
 
         Parameters:
-            label (str): Used for both the filename and the keyframe order (e.g., "tsc").
-            root (str, optional): Directory where the raw TXT file is located.
-            num_samples (int, optional): Number of random samples to generate.
-            run_augment (bool, optional): Decide if augment is needed, default to True.
-            mirror_prob (float, optional): Probability of mirroring, default to 0.2,
-            noise_mean (float. optional): Mean value of gaussian noise, default to 0.0,
-            noise_std (float, optional): Standard deviation of gaussian noise, default to 0.2,
-            random_low (float, optional): Lowest corner point of the base plane offset, default to 0.0,
-            random_high: (float, optional): Highest corner point of the base plane offset, default to 0.2,
-            downsample_factor (int, optional): Factor by which to reduce temporal resolution.
-            memory_length (int, optional): Number of previous timesteps included in each target sequence.
-            cumulation_rate (float, optional): Rate at which target values increase between keyframes.
+          - label (str): Used for both the filename and the keyframe order (e.g., "tsc").
+          - root (str, optional): Directory where the raw TXT file is located.
+          - num_samples (int, optional): Number of random samples to generate.
+          - run_augment (bool, optional): Decide if augment is needed, default to True.
+          - mirror_prob (float, optional): Probability of applying the horizontal flip. Default is 0.2.
+          - noise_mean (float, optional): Mean of the Gaussian noise. Default is 0.0.
+          - noise_std (float, optional): Standard deviation of the Gaussian noise. Default is 0.2.
+          - random_low (float, optional): Lower bound for the random values used in corner interpolation. Default is 0.0.
+          - random_high (float, optional): Upper bound for the random values used in corner interpolation. Default is 0.2.
+          - downsample_factor (int, optional): Factor by which to reduce temporal resolution.
+          - memory_length (int, optional): Number of previous timesteps included in each target sequence.
+          - cumulation_rate (float, optional): Rate at which target values increase between keyframes.
         """
         self.feature_samples, self.target_samples = None, None
         self.run_augment = run_augment
-        # TODO: Add data augment parameters
+        self.mirror_prob = mirror_prob
+        self.noise_mean = noise_mean
+        self.noise_std = noise_std
+        self.random_low = random_low
+        self.random_high = random_high
 
         self.load_data(label, cumulation_rate, root)
         self.feature_interpolate()
@@ -161,13 +165,7 @@ class GMRMemoryDataset(Dataset):
             interp_results.append(Z)
         self.data_interp = np.stack(interp_results, axis=0)  # Shape: (total_time, 6, 8)
 
-    @staticmethod
-    def feature_augment(feature_sample,
-                        mirror_prob=0.3,
-                        noise_mean=0.0,
-                        noise_std=0.25,
-                        random_low=-0.5,
-                        random_high=0.5):
+    def feature_augment(self, feature_sample):
         """
         Apply data augmentation to a single feature sample via mirroring, noise, and
         a smoothly varying offset. Specifically:
@@ -196,11 +194,6 @@ class GMRMemoryDataset(Dataset):
         
         Parameters:
           - feature_sample (numpy.ndarray): The feature map or volume to be augmented.
-          - mirror_prob (float, optional): Probability of applying the horizontal flip. Default is 0.5.
-          - noise_mean (float, optional): Mean of the Gaussian noise. Default is 0.0.
-          - noise_std (float, optional): Standard deviation of the Gaussian noise. Default is 0.8.
-          - random_low (float, optional): Lower bound for the random values used in corner interpolation. Default is 0.0.
-          - random_high (float, optional): Upper bound for the random values used in corner interpolation. Default is 1.0.
         
         Returns:
           - numpy.ndarray: The augmented feature sample, with the same shape as the input.
@@ -208,7 +201,7 @@ class GMRMemoryDataset(Dataset):
         sample = copy.deepcopy(feature_sample)
 
         # Add random mirror
-        if np.random.rand() < mirror_prob:
+        if np.random.rand() < self.mirror_prob:
             if sample.ndim == 2:
                 sample = np.fliplr(sample)
             elif sample.ndim == 3:
@@ -217,19 +210,19 @@ class GMRMemoryDataset(Dataset):
                 raise ValueError("Unsupported data dimensions for mirror transformation")
         
         # Add noise
-        gaussian_noise = np.random.normal(loc=noise_mean, scale=noise_std, size=sample.shape)
+        gaussian_noise = np.random.normal(loc=self.noise_mean, scale=self.noise_std, size=sample.shape)
         sample = sample + gaussian_noise
 
         # Add base plane offset
-        p1 = np.random.uniform(random_low, random_high)
-        p2 = np.random.uniform(random_low, random_high)
+        p1 = np.random.uniform(self.random_low, self.random_high)
+        p2 = np.random.uniform(self.random_low, self.random_high)
         pm = (p1 + p2) / 2.0
         corner_data = np.array([
             [p1, pm],
             [pm, p2]
         ])
         k = np.random.randint(0, 4)
-        corner_data = np.rot90(corner_data, k)
+        corner_data = np.rot90(corner_data, k)  # randomly rotate the 
 
         interp = RegularGridInterpolator(([0, 6], [0, 8]), corner_data, bounds_error=False, fill_value=None)
         xx = np.arange(6)
