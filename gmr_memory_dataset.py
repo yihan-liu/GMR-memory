@@ -81,6 +81,11 @@ class GMRMemoryDataset(Dataset):
         """
         feature = torch.tensor(self.feature_samples[index], dtype=torch.float32)
         target = torch.tensor(self.target_samples[index], dtype=torch.float32)
+
+        # if the label does not contain 't', assume it only contains square and circle,
+        # so we return only the corresponding channels (columns 1 and 2)
+        if 't' not in self.label:
+            target = target[..., 1:3]   # shape becomes (memory_length, 2)
         return {'feature': feature, 'target': target}
 
     def load_data(self, 
