@@ -51,6 +51,8 @@ class GMRMemoryDataset(Dataset):
           - cumulation_rate (float, optional): Rate at which target values increase between keyframes.
         """
         self.feature_samples, self.target_samples = None, None
+        
+        self.label = label
         self.run_augment = run_augment
         self.mirror_prob = mirror_prob
         self.noise_mean = noise_mean
