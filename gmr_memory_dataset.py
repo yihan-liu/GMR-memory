@@ -9,6 +9,7 @@ from scipy.interpolate import RegularGridInterpolator
 import torch
 from torch.utils.data import Dataset
 from utils import *
+import matplotlib.pyplot as plt
 
 class GMRMemoryDataset(Dataset):
     def __init__(self, 
@@ -115,43 +116,53 @@ class GMRMemoryDataset(Dataset):
         timestamps = raw[:, 0] - timestamp_offset
         total_time = len(timestamps)
 
-        # Initialize target with zeros for three shapes (triangle, square, circle)
+        # Initialize target array for three shapes (triangle, square, circle)
         self.all_targets = np.zeros((total_time, 3), dtype=float)
         key_frames = KEY_FRAMES_DICT.get(label)
         if key_frames is None:
             raise ValueError(f"Key frames for label '{label}' not found in KEY_FRAMES_DICT.")
         key_frames = [kf - timestamp_offset for kf in key_frames]  # offset adjustment
 
-        # Mapping for shape characters to target columns.
+        # Mapping of shape characters to target channels.
         shape_map = {'t': 0, 's': 1, 'c': 2}
-        shape_indices = {'t': [], 's': [], 'c': []}
 
-        # Determine order based on characters in label.
-        for i, shape in enumerate(label):
-            if shape in shape_map:
-                shape_indices[shape].append(i)
+        for shape, channel in shape_map.items():
+            events_for_shape = []
+            for i, ch in enumerate(label):
+                if ch == shape:
+                    events_for_shape.append(key_frames[i])
+            # Insert initial event at time 0
+            events = [0.0] + events_for_shape
+            # Append final event at final timestamp
+            events.append(timestamps[-1])
+            events.sort()
 
-        # Process start-end pairs for each shape.
-        for shape, indices in shape_indices.items():
-            shape_idx = shape_map[shape]
-            for j in range(0, len(indices), 2):
-                if j + 1 < len(indices):
-                    start_time = key_frames[indices[j]]
-                    end_time = key_frames[indices[j + 1]]
-                    start_idx = np.argwhere(timestamps == start_time).flatten()
-                    end_idx = np.argwhere(timestamps == end_time).flatten()
-                    if start_idx.size and end_idx.size:
-                        s = start_idx[0]
-                        e = end_idx[0]
-                        for k in range(s, e + 1):
-                            self.all_targets[k, shape_idx] = (k - s) * rate
-        self.all_targets = np.log1p(self.all_targets)
+            # Process each segment
+            # even segments are release, odd segments are placement
+            for seg in range(len(events) - 1):
+                start_time = events[seg]
+                end_time = events[seg + 1]
+                # Find the starting and ending indices in the timestamps array
+                s = np.searchsorted(timestamps, start_time)
+                e = np.searchsorted(timestamps, end_time)
+                # Determine accumulation direction
+                seg_sign = -1 if seg % 2 == 0 else 1
+                # for each time index in the segment, assign a linearly changing target
+                for k in range(s, e):
+                    self.all_targets[k, channel] = seg_sign * ((k - s) * rate)
+                # ensure an abrupt reset at the event time
+                if s < total_time:
+                    self.all_targets[s, channel] = 0
+
+        # Apply a signed logarithmic transformation to targets so that both positive
+        # and negative values are compressed appropriately.
+        self.all_targets = np.sign(self.all_targets) * np.log1p(np.abs(self.all_targets))
 
         # Remove the time column and normalize sensor data.
         self.data = raw[:, 1:]
         for i in range(self.data.shape[1]):
             self.data[:, i] -= self.data[0, i]
-        # Apply a signed logarithmic transformation.
+        # Apply a signed logarithmic transformation to sensor data.
         self.data_norm = np.sign(self.data) * np.log1p(np.abs(self.data))
 
     def feature_interpolate(self):
@@ -308,3 +319,8 @@ class GMRMemoryDataset(Dataset):
     
     def get_augment_tool_samples(self):
         return {'gaussian': self.gaussian_feature_samples, 'offset': self.offset_feature_samples}
+    
+if __name__ == '__main__':
+    dataset = GMRMemoryDataset('csttcs', num_samples=10)
+    plt.plot(dataset.all_targets)
+    plt.show()
