@@ -143,7 +143,7 @@ class GMRMemoryModelDualHead(nn.Module):
 
         # Classification head: predicts binary presence.
         x_class = self.fc_class(x)          # [B, output_dim]
-        x_class = F.sigmoid(x_class)        # Apply sigmoid activation
+        x_class = F.tanh(x_class)           # Apply tanh activation
         x_class = x_class.unsqueeze(2)      # Reshape to [B, output_dim, 1]
 
         # Stack
@@ -208,8 +208,80 @@ class GMRMemoryModelPTuning(nn.Module):
         return x
     
 class GMRMemoryModelAdapted(nn.Module):
-    # TODO: add a Linear layer in front of the GMRMemoryModel to do domain adaptation
-    ...
+    """
+    A model that adapts the GMRMemoryModelDualHead for accommodating additional shapes.
+    It reuses the base model's feature extractor (convolutional layers, fc1, and dropout) while freezing
+    its parameters, and adds new adaptation layers for binary presence and accumulated time prediction 
+    for a larger number of shapes (3 shapes for now, added triangle).
+
+    The final output is a stacked tensor of shape [B, 2, new_output_dim, 1] where:
+      - output[:, 0, :, 0] holds the binary presence predictions (values in [0, 1]).
+      - output[:, 1, :, 0] holds the accumulated time predictions.
+    """
+    def __init__(self, base_model: GMRMemoryModelDualHead, new_output_dim: int=3):
+        super(GMRMemoryModelAdapted, self).__init__()
+        self.base_model = base_model
+        # Freeze all params of the base model
+
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+
+        # We'll use the base model's feature extractor. The base model's feature extractor
+        # is defined by its conv1, pool1, conv2, pool2, fc1, and dropout layers.
+        # These layers produce an intermediate 64-dimensional vector.
+
+        # New adaptation layers: map the 64-dimensional feature vector to the extended shape set
+        self.adapt_fc_time = nn.Linear(64, new_output_dim)
+        self.adapt_fc_class = nn.Linear(64, new_output_dim)
+        self.new_output_dim = new_output_dim
+
+    def forward(self, x: torch.Tensor):
+        """
+        Forward pass for the adapted model.
+        
+        Parameters:
+            x (Tensor): Input tensor of shape [B, 6, 8].
+        
+        Returns:
+            Tensor: Stacked output tensor of shape [B, 2, new_num_shapes, 1],
+                    where output[:, 0, :, 0] are the binary presence predictions (via sigmoid)
+                    and output[:, 1, :, 0] are the accumulated time predictions.
+        """
+        # Use the base model as a frozen feature extractor.
+        # We replicate the base model's forward operations up to (and including) fc1 and dropout.
+        with torch.no_grad():
+            x = x.unsqueeze(1)                  # [B, 1, 6, 8]
+            
+            # Convolutional block 1
+            x = self.base_model.conv1(x)        # [B, 16, 6, 8]
+            x = F.relu(x)
+            x = self.base_model.pool1(x)        # [B, 16, 3, 4]
+
+            # Convolutional block 2
+            x = self.base_model.conv2(x)        # [B, 32, 3, 4]
+            x = F.relu(x)
+            x = self.base_model.pool2(x)        # [B, 32, 1, 2]
+
+            # Flatten
+            x = x.view(x.size(0), -1)           # [B, 32*1*2]
+
+            # Shared FC layers
+            shared_features = self.base_model.fc1(x)
+            shared_features = F.relu(shared_features)
+            shared_features = self.base_model.dropout(shared_features)  # [B, 64]
+
+        # Pass the frozen shared features thru the new adaptation layers
+        # Regression head
+        out_time = self.adapt_fc_time(shared_features)      # [B, new_output_dim]
+        out_time = out_time.unsqueeze(2)                    # [B, new_output_dim, 1]
+
+        # Classification head
+        out_class = self.adapt_fc_class(shared_features)    # [B, new_output_dim]
+        out_class = F.tanh(out_class)                       # [B, new_output_dim] with values in [-1, 1]
+        out_class = out_class.unsqueeze(2)                  # [B, new_output_dim, 1]
+
+        out = torch.stack([out_time, out_class], dim=1)     # [B, 2, new_output_dim, 1]
+        return out
 
 if __name__ == '__main__':
     # test base model (phase 1)
@@ -229,3 +301,8 @@ if __name__ == '__main__':
     # pt_model = GMRMemoryModelPTuning(base_model)
     # output_pt = pt_model(dummy_input)
     # print("GMRMemoryModelPTuning output shape:", output_pt.shape)  # Expect: [4, 3, 1]
+    
+    # Test the adaptation model (phase 2).
+    adap_model = GMRMemoryModelAdapted(base_model)
+    output_adap = adap_model(dummy_input)
+    print("GMRMemoryModelPTuning output shape:", output_adap.shape)  # Expect: [16, 2, 3, 1]
