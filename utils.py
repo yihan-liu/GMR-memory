@@ -1,6 +1,7 @@
 # utils.py
 
 import numpy as np
+import torch.nn as nn
 
 KNOWN_CHANNELS = np.array([
     [0, 0], [0, 3],
@@ -36,3 +37,9 @@ def r2(y_true: np.ndarray, y_pred: np.ndarray):
     ss_res = np.sum((y_true - y_pred) ** 2)
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     return 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
+
+def compute_loss_dualhead(pred_presence, pred_time, target_presence, target_time, alpha=1.0):
+    bce_loss = nn.BCELoss()(pred_presence, target_presence)
+    mse_loss = nn.MSELoss()(pred_time, target_time)
+    total_loss = bce_loss + alpha * mse_loss
+    return total_loss
