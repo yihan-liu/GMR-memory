@@ -153,7 +153,7 @@ class GMRMemoryDataset(Dataset):
                 for k in range(s, e):
                     self.accumulation_time[k, channel] = seg_sign * ((k - s) * rate)
                     self.accumulation_time_abs[k, channel] = (k - s) * rate
-                    self.presence_indicator[k, channel] = 0 if seg_sign <= 0 else 1  # use binary indicator
+                    self.presence_indicator[k, channel] = seg_sign
                 # ensure an abrupt reset at the event time
                 if s < total_time:
                     self.accumulation_time[s, channel] = 0
