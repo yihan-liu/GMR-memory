@@ -38,31 +38,35 @@ def r2(y_true: np.ndarray, y_pred: np.ndarray):
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     return 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
 
-def compute_loss_dualhead(output, target_presence, target_time, alpha=1.0):
+def compute_loss_dualhead(outputs, targets, alpha=1.0):
     """
     Compute the combined loss for the dual-head model output.
 
     Parameters:
-        output (Tensor): Model output tensor of shape [B, 2, num_shapes, 1], where:
+        outputs (Tensor): Model output tensor of shape [B, 2, num_shapes, 1], where:
                          - output[:, 0, :, :] contains binary presence predictions.
                          - output[:, 1, :, :] contains accumulated time predictions.
-        target_presence (Tensor): Ground truth binary presence tensor of shape [B, num_shapes, 1].
-        target_time (Tensor): Ground truth accumulated time tensor of shape [B, num_shapes, 1].
+        targets (Tensor): Ground truth tensor of shape [B, 2, num_shapes, 1].
         alpha (float): Weighting factor for the regression (MSE) loss.
 
     Returns:
         total_loss (Tensor): Combined loss value.
     """
     # Extract predictions from the stacked output.
-    pred_presence = output[:, 0, :, :]  # [B, num_shapes, 1]
-    pred_time = output[:, 1, :, :]      # [B, num_shapes, 1]
+    pred_time = outputs[:, 0, :, :]         # [B, num_shapes, 1]
+    pred_presence = outputs[:, 1, :, :]     # [B, num_shapes, 1]
 
-    # Compute the binary cross entropy loss for presence.
-    bce_loss = nn.BCELoss()(pred_presence, target_presence)
+    target_time = targets[:, 0, :, :]       # [B, num_shapes, 1]
+    target_presence = targets[:, 1, :, :]   # [B, num_shapes, 1]
     
     # Compute the mean squared error loss for accumulated time.
-    mse_loss = nn.MSELoss()(pred_time, target_time)
+    criterion_time = nn.MSELoss()
+    mse_loss = criterion_time(pred_time, target_time)
+
+    # Compute the binary cross entropy loss for presence.
+    criterion_presence = nn.BCELoss()
+    bce_loss = criterion_presence(pred_presence, target_presence)
     
     # Combine the losses with the weighting factor.
-    total_loss = bce_loss + alpha * mse_loss
+    total_loss = mse_loss + alpha * bce_loss
     return total_loss
