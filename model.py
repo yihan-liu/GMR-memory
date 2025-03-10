@@ -69,19 +69,20 @@ class GMRMemoryModel(nn.Module):
 
 class GMRMemoryModelDualHead(nn.Module):
     """
-    A dual-head CNN model designed for sensor array data that outputs predictions for both shape presence and accumulated time.
-
-    The model takes in a feature tensor of shape [B, 1, H, W] (representing the sensor measurements)
+    A dual-head CNN model that takes in a feature tensor of shape [6, 8]
     and outputs two prediction tensors:
-      - A binary presence tensor of shape [B, num_shapes] indicating whether each shape is currently detected.
-      - A regression tensor of shape [B, num_shapes] providing the estimated accumulated time for which each shape has been present.
+      - A binary presence tensor of shape [B, num_shapes, 1] indicating whether each shape is currently present.
+      - A regression tensor of shape [B, num_shapes, 1] providing the estimated accumulated time for each shape.
 
-    The architecture is as follows:
+    This model reuses most of the network parameters from GMRMemoryModel:
       - Two convolutional layers with ReLU activations and max pooling.
-      - A fully connected layer that flattens the feature maps into an intermediate vector.
-      - Two separate output heads:
-            - A classification head with a sigmoid activation for binary presence detection.
-            - A regression head for continuous accumulated time estimation.
+      - A fully connected layer that maps the flattened features to an intermediate vector.
+      - A shared dropout layer for regularization.
+    It then splits into two separate output branches:
+      - The classification head (using a sigmoid activation) predicts binary presence.
+      - The regression head estimates the accumulated time.
+    
+    NOTE: The parameter num_shapes determines the output dimension for both heads.
     """
     def __init__(self, output_dim=3):
         super(GMRMemoryModelDualHead, self).__init__()
@@ -89,15 +90,18 @@ class GMRMemoryModelDualHead(nn.Module):
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, stride=1, padding=1)
         self.pool1 = nn.MaxPool2d(kernel_size=2)  # output: [B, 16, 3, 4]
 
-        # Second convolution: output ramains 3x4 with padding.
+        # Second convolution: output remains 3x4 with padding.
         self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1)
         self.pool2 = nn.MaxPool2d(kernel_size=2)  # output: [B, 32, 1, 2]
 
-        # Flatten and pass through fully connect layers.
-        self.fc_shared = nn.Linear(32 * 1 * 2, 64)
+        # Flatten and pass through a shared fully connected layer.
+        self.fc1 = nn.Linear(32 * 1 * 2, 64)
         self.dropout = nn.Dropout(p=0.1)
 
-        self.fc_indicator = nn.Linear(64, output_dim)
+        # Dual output heads:
+        # Classification head for binary presence detection.
+        self.fc_class = nn.Linear(64, output_dim)
+        # Regression head for accumulated time estimation.
         self.fc_time = nn.Linear(64, output_dim)
 
     def forward(self, x: torch.Tensor):
@@ -134,15 +138,18 @@ class GMRMemoryModelDualHead(nn.Module):
         x = self.dropout(x)
 
         # Classification head: predicts binary presence.
-        x_class = self.fc_class(x)       # [B, num_shapes]
-        x_class = torch.sigmoid(x_class)  # Apply sigmoid activation
-        x_class = x_class.unsqueeze(2)    # Reshape to [B, num_shapes, 1]
+        x_class = self.fc_class(x)          # [B, output_dim]
+        x_class = F.sigmoid(x_class)        # Apply sigmoid activation
+        x_class = x_class.unsqueeze(2)      # Reshape to [B, output_dim, 1]
 
         # Regression head: estimates accumulated time.
-        x_time = self.fc_time(x)         # [B, num_shapes]
-        x_time = x_time.unsqueeze(2)     # Reshape to [B, num_shapes, 1]
+        x_time = self.fc_time(x)            # [B, output_dim]
+        x_time = x_time.unsqueeze(2)        # Reshape to [B, output_dim, 1]
 
-        return x_class, x_time
+        # Stack
+        out = torch.stack((x_class, x_time), dim=1)
+
+        return out
 
 class GMRMemoryModelPTuning(nn.Module):
     """
@@ -206,13 +213,19 @@ class GMRMemoryModelAdaptation(nn.Module):
 
 if __name__ == '__main__':
     # test base model (phase 1)
-    base_model = GMRMemoryModel(output_dim=2)
-    dummy_input = torch.randn(4, 6, 8)  # Example: batch of 4 samples.
+    # base_model = GMRMemoryModel(output_dim=2)
+    # dummy_input = torch.randn(4, 6, 8)  # Example: batch of 4 samples.
+    # output = base_model(dummy_input)
+    # print("GMRMemoryModel (phase 1) input shape:", dummy_input.shape)
+    # print("GMRMemoryModel (phase 1) output shape:", output.shape)  # Expect: [4, 2, 1]
+    
+    base_model = GMRMemoryModelDualHead(output_dim=2)
+    dummy_input = torch.randn(16, 6, 8)  # Example: batch of 16 samples.
     output = base_model(dummy_input)
-    print("GMRMemoryModel (phase 1) input shape:", dummy_input.shape)
-    print("GMRMemoryModel (phase 1) output shape:", output.shape)  # Expect: [4, 2, 1]
+    print("GMRMemoryModelDualHead (phase 1) input shape:", dummy_input.shape)
+    print("GMRMemoryModelDualHead (phase 1) output shape:", output.shape)  # Expect: [16, 2, 2, 1]
 
     # Test the p-tuning model (phase 2).
-    pt_model = GMRMemoryModelPTuning(base_model)
-    output_pt = pt_model(dummy_input)
-    print("GMRMemoryModelPTuning output shape:", output_pt.shape)  # Expect: [4, 3, 1]
+    # pt_model = GMRMemoryModelPTuning(base_model)
+    # output_pt = pt_model(dummy_input)
+    # print("GMRMemoryModelPTuning output shape:", output_pt.shape)  # Expect: [4, 3, 1]
