@@ -62,7 +62,7 @@ def train_phase1(args):
     print(model)
 
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 
     train_losses = []
     train_r2s = []
@@ -150,6 +150,8 @@ def train_phase1(args):
                 f'Train Loss: {epoch_train_loss:.4f}, Train R2: {epoch_train_r2:.4f}, '
                 f'Validate Loss: {epoch_val_loss:.4f}, Validate R2: {epoch_val_r2:.4f}'
             )
+    torch.save(model.state_dict(), args.phase1_ckpt)
+    print(f"Phase 1 complete. Checkpoint saved to {args.phase1_ckpt}")
 
 def train_phase2(args):
     """
@@ -258,8 +260,8 @@ def train_phase2(args):
                 f'Train Loss: {epoch_train_loss:.4f}, Train R2: {epoch_train_r2:.4f}, '
                 f'Validate Loss: {epoch_val_loss:.4f}, Validate R2: {epoch_val_r2:.4f}'
             )
-        torch.save(model.state_dict(), args.phase2_ckpt)
-        print(f"Phase 2 p-tuning complete. Checkpoint saved to {args.phase2_ckpt}")
+    torch.save(model.state_dict(), args.phase2_ckpt)
+    print(f"Phase 2 p-tuning complete. Checkpoint saved to {args.phase2_ckpt}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train CNN model with GMRMemoryDataset')
