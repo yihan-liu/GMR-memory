@@ -137,17 +137,17 @@ class GMRMemoryModelDualHead(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
 
+        # Regression head: estimates accumulated time.
+        x_time = self.fc_time(x)            # [B, output_dim]
+        x_time = x_time.unsqueeze(2)        # Reshape to [B, output_dim, 1]
+
         # Classification head: predicts binary presence.
         x_class = self.fc_class(x)          # [B, output_dim]
         x_class = F.sigmoid(x_class)        # Apply sigmoid activation
         x_class = x_class.unsqueeze(2)      # Reshape to [B, output_dim, 1]
 
-        # Regression head: estimates accumulated time.
-        x_time = self.fc_time(x)            # [B, output_dim]
-        x_time = x_time.unsqueeze(2)        # Reshape to [B, output_dim, 1]
-
         # Stack
-        out = torch.stack((x_class, x_time), dim=1)
+        out = torch.stack((x_time, x_class), dim=1)
 
         return out
 
@@ -207,7 +207,7 @@ class GMRMemoryModelPTuning(nn.Module):
         x = x.unsqueeze(2)  # [B, 3, 1]
         return x
     
-class GMRMemoryModelAdaptation(nn.Module):
+class GMRMemoryModelAdapted(nn.Module):
     # TODO: add a Linear layer in front of the GMRMemoryModel to do domain adaptation
     ...
 
