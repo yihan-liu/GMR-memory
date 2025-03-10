@@ -88,7 +88,7 @@ class GMRMemoryDataset(Dataset):
         # if the label does not contain 't', assume it only contains square and circle,
         # so we return only the corresponding channels (columns 1 and 2)
         if 't' not in self.label:
-            target = target[..., 1:3]   # shape becomes (memory_length, 2)
+            target = target[..., 1:3]
         return {'feature': feature, 'target': target}
 
     def load_data(self, 
@@ -119,7 +119,7 @@ class GMRMemoryDataset(Dataset):
         # Initialize target array for three shapes (triangle, square, circle)
         self.accumulation_time = np.zeros((total_time, 3), dtype=float)
         self.accumulation_time_abs = np.zeros((total_time, 3), dtype=float)
-        self.placement_indicator = np.zeros((total_time, 3), dtype=float)
+        self.presence_indicator = np.zeros((total_time, 3), dtype=float)
         key_frames = KEY_FRAMES_DICT.get(label)
         if key_frames is None:
             raise ValueError(f"Key frames for label '{label}' not found in KEY_FRAMES_DICT.")
@@ -153,7 +153,7 @@ class GMRMemoryDataset(Dataset):
                 for k in range(s, e):
                     self.accumulation_time[k, channel] = seg_sign * ((k - s) * rate)
                     self.accumulation_time_abs[k, channel] = (k - s) * rate
-                    self.placement_indicator[k, channel] = seg_sign
+                    self.presence_indicator[k, channel] = 0 if seg_sign <= 0 else 1  # use binary indicator
                 # ensure an abrupt reset at the event time
                 if s < total_time:
                     self.accumulation_time[s, channel] = 0
@@ -283,7 +283,7 @@ class GMRMemoryDataset(Dataset):
         downsampled_features = self.signal_interp[::downsample_factor, ...]
         # NOTE: Now use two different targets instead of one
         downsampled_targets = np.stack((self.accumulation_time_abs[::downsample_factor, ...],
-                                        self.placement_indicator[::downsample_factor, ...]),
+                                        self.presence_indicator[::downsample_factor, ...]),
                                         axis=1)
         total_downsampled = downsampled_features.shape[0]
         if total_downsampled < memory_length:
@@ -313,9 +313,9 @@ class GMRMemoryDataset(Dataset):
             
             feature_sample_list.append(feature_sample)
             target_sample_list.append(target_sample)
-        self.feature_samples = np.stack(feature_sample_list, axis=0)                        # Shape: (num_samples, 6, 8)
-        self.target_samples = np.stack(target_sample_list, axis=0)                          # Shape: (num_samples, memory_length, 3)
-        
+        self.feature_samples = np.stack(feature_sample_list, axis=0)    # Shape: (num_samples, 6, 8)
+        self.target_samples = np.stack(target_sample_list, axis=0)      # Shape: (num_samples, memory_length, 2, 3)
+
         # for evaluation
         if self.run_augment:
             self.original_feature_samples = np.stack(original_feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
@@ -329,7 +329,9 @@ class GMRMemoryDataset(Dataset):
         return {'gaussian': self.gaussian_feature_samples, 'offset': self.offset_feature_samples}
     
 if __name__ == '__main__':
-    dataset = GMRMemoryDataset('csttcs', num_samples=10)
+    dataset = GMRMemoryDataset('sccs', num_samples=10)
     plt.plot(dataset.accumulation_time_abs)
-    plt.plot(dataset.placement_indicator)
+    plt.plot(dataset.presence_indicator)
     plt.show()
+
+    print(dataset.target_samples[..., 1:3])
