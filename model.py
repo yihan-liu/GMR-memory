@@ -284,23 +284,12 @@ class GMRMemoryModelAdapted(nn.Module):
         return out
 
 if __name__ == '__main__':
-    # test base model (phase 1)
-    # base_model = GMRMemoryModel(output_dim=2)
-    # dummy_input = torch.randn(4, 6, 8)  # Example: batch of 4 samples.
-    # output = base_model(dummy_input)
-    # print("GMRMemoryModel (phase 1) input shape:", dummy_input.shape)
-    # print("GMRMemoryModel (phase 1) output shape:", output.shape)  # Expect: [4, 2, 1]
     
     base_model = GMRMemoryModelDualHead(output_dim=2)
     dummy_input = torch.randn(16, 6, 8)  # Example: batch of 16 samples.
     output = base_model(dummy_input)
     print("GMRMemoryModelDualHead (phase 1) input shape:", dummy_input.shape)
     print("GMRMemoryModelDualHead (phase 1) output shape:", output.shape)  # Expect: [16, 2, 2, 1]
-
-    # Test the p-tuning model (phase 2).
-    # pt_model = GMRMemoryModelPTuning(base_model)
-    # output_pt = pt_model(dummy_input)
-    # print("GMRMemoryModelPTuning output shape:", output_pt.shape)  # Expect: [4, 3, 1]
     
     # Test the adaptation model (phase 2).
     adap_model = GMRMemoryModelAdapted(base_model)
