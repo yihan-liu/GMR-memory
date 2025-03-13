@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 from tqdm import tqdm
 
 from gmr_memory_dataset import GMRMemoryDataset
-from model import GMRMemoryModel, GMRMemoryModelPTuning
+from model import GMRMemoryModelDualHead, GMRMemoryModelAdapted
 from utils import *
 
 def train_phase1(args):
@@ -20,7 +20,8 @@ def train_phase1(args):
     Labels (e.g. "cscs" and "sccs") do not contain triangle,
     so the dataset returns target sequences with only 2 channels.
     """
-    labels = [k for k in KEY_FRAMES_DICT.keys() if 't' not in k] 
+    # labels = [k for k in KEY_FRAMES_DICT.keys() if 't' not in k] 
+    labels = KEY_FRAMES_DICT.keys()
     print(f'Phase 1 trianing on labels: {labels}')
 
     num_labels = len(labels)
@@ -35,7 +36,10 @@ def train_phase1(args):
             num_samples=samples_per_label,
             run_augment=True,
             cumulation_rate=args.cumulation_rate,
-            root=args.root
+            root=args.root,
+            mirror_prob=0.5,
+            noise_std=0.2,
+            random_high=0.2
         )
         train_datasets.append(dataset)
     combined_train_dataset = ConcatDataset(train_datasets)
@@ -44,7 +48,7 @@ def train_phase1(args):
     for label in labels:
         dataset = GMRMemoryDataset(
             label=label,
-            num_samples=samples_per_label // 10,
+            num_samples=500,
             run_augment=False,
             cumulation_rate=args.cumulation_rate,
             root=args.root
@@ -57,12 +61,11 @@ def train_phase1(args):
     validate_loader = DataLoader(combined_validate_dataset, batch_size=batch_size, shuffle=False)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = GMRMemoryModel(output_dim=2).to(device)
+    model = GMRMemoryModelDualHead(output_dim=3).to(device)  # NOTE: use output dim 3 now
     print("Total model parameters:", sum(p.numel() for p in model.parameters()))
     print(model)
 
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
     train_losses = []
     train_r2s = []
@@ -80,13 +83,14 @@ def train_phase1(args):
 
         for batch in train_loader:
             features = batch['feature'].to(device)      # [B, 6, 8]
-            targets = batch['target'].to(device)        # [B, memory_length, 2]
+            targets = batch['target'].to(device)        # [B, memory_length, 2, output_dim]
             # Use the last timestamp as ground truth
-            targets = targets[:, -1, :].unsqueeze(2)    # [B, 2, 1]
-            
+            targets = targets[:, -1, :].unsqueeze(3)    # [B, 2, output_dim, 1]
+
             optimizer.zero_grad()
-            outputs = model(features)                   # [B, 2, 1]
-            loss = criterion(outputs, targets)
+            outputs = model(features)                   # [B, 2, output_dim, 1]
+
+            loss = gmr_loss_dualhead(outputs, targets, alpha=1.5)
             loss.backward()
             optimizer.step()
 
@@ -94,8 +98,17 @@ def train_phase1(args):
             epoch_train_loss += loss.item() * current_batch_size
             total_train += current_batch_size
 
-            train_preds.append(outputs.detach().cpu().numpy())
-            train_targets.append(targets.detach().cpu().numpy())
+            pred_time = outputs[:, 0, :, :]
+            pred_presence = outputs[:, 1, :, :]
+            pred_presence = torch.where(pred_presence < 0, -1, 1)  # convert prediction class to only -1 and 1
+            pred_signed_time = (pred_time * pred_presence).squeeze(2)
+
+            targets_time = targets[:, 0, :, :]
+            targets_presence = targets[:, 1, :, :]
+            signed_target = (targets_time * targets_presence).squeeze(2)
+
+            train_preds.append(pred_signed_time.detach().cpu().numpy())
+            train_targets.append(signed_target.detach().cpu().numpy())
 
         # epoch train loss
         epoch_train_loss /= total_train
@@ -103,7 +116,7 @@ def train_phase1(args):
         # epoch train r2
         train_preds = np.concatenate(train_preds, axis=0).flatten()
         train_targets = np.concatenate(train_targets, axis=0).flatten()
-        epoch_train_r2 = r2(train_targets, train_preds)
+        epoch_train_r2 = gmr_r2(train_targets, train_preds)
 
         train_losses.append(epoch_train_loss)
         train_r2s.append(epoch_train_r2)
@@ -120,17 +133,26 @@ def train_phase1(args):
             for batch in validate_loader:
                 features = batch['feature'].to(device)
                 targets = batch['target'].to(device)
-                targets = targets[:, -1, :].unsqueeze(2)
+                targets = targets[:, -1, :].unsqueeze(3)
 
                 outputs = model(features)
-                loss = criterion(outputs, targets)
 
+                loss = gmr_loss_dualhead(outputs, targets, alpha=1.5)
                 current_batch_size = features.size(0)
                 epoch_val_loss += loss.item() * current_batch_size
                 total_val += current_batch_size
 
-                val_preds.append(outputs.cpu().numpy())
-                val_targets.append(targets.cpu().numpy())
+                pred_time = outputs[:, 0, :, :]
+                pred_presence = outputs[:, 1, :, :]
+                pred_presence = torch.where(pred_presence < 0, -1, 1)  # convert prediction class to only -1 and 1
+                pred_signed_time = (pred_time * pred_presence).squeeze(2)
+
+                targets_time = targets[:, 0, :, :]
+                targets_presence = targets[:, 1, :, :]
+                signed_target = (targets_time * targets_presence).squeeze(2)
+
+                val_preds.append(pred_signed_time.detach().cpu().numpy())
+                val_targets.append(signed_target.detach().cpu().numpy())
         
         # epoch validate loss
         epoch_val_loss /= total_val
@@ -138,29 +160,37 @@ def train_phase1(args):
         # epoch validate r2
         val_preds = np.concatenate(val_preds, axis=0).flatten()
         val_targets = np.concatenate(val_targets, axis=0).flatten()
-        epoch_val_r2 = r2(val_targets, val_preds)
+        epoch_val_r2 = gmr_r2(val_targets, val_preds)
 
         val_losses.append(epoch_val_loss)
         val_r2s.append(epoch_val_r2)
 
         # Every 10 epochs (and at the final epoch), print progress using tqdm.write
-        if epoch % 5 == 0 or epoch == args.num_epochs:
+        if epoch % 1 == 0 or epoch == args.num_epochs:
             tqdm.write(
-                f'Epoch {epoch}/{args.num_epochs}: '
+                f'Phase 1 - Epoch {epoch}/{args.num_epochs}: '
                 f'Train Loss: {epoch_train_loss:.4f}, Train R2: {epoch_train_r2:.4f}, '
                 f'Validate Loss: {epoch_val_loss:.4f}, Validate R2: {epoch_val_r2:.4f}'
             )
     torch.save(model.state_dict(), args.phase1_ckpt)
-    print(f"Phase 1 complete. Checkpoint saved to {args.phase1_ckpt}")
+    print(f'Phase 1 complete. Checkpoint saved to {args.phase1_ckpt}')
+
+    train_losses = np.array(train_losses)
+    train_r2s = np.array(train_r2s)
+    val_losses = np.array(val_losses)
+    val_r2s = np.array(val_r2s)
+    phase1_report = np.stack((train_losses, train_r2s, val_losses, val_r2s), axis=1)
+    np.save('phase1_report', phase1_report)
+    print('Report saved to phase1_report.npy')
 
 def train_phase2(args):
     """
-    Phase 2: P-tuning adaptation.
-    Loads the pretrained base model (which outputs 2 channels), wraps it with the PTuning module,
+    Phase 2: Adaptation.
+    Loads the pretrained base model (which outputs 2 channels), wraps it with the Adaptation module,
     and trains only the prompt (and new head) on data that includes triangle (labels contain 't').
     """
     labels = [k for k in KEY_FRAMES_DICT.keys() if 't' in k] 
-    print(f'Phase 2 (P-tuning) training on labels: {labels}')
+    print(f'Phase 2 (Adaptation) training on labels: {labels}')
 
     num_labels = len(labels)
     samples_per_label = args.num_total_samples // num_labels
@@ -182,7 +212,7 @@ def train_phase2(args):
     for label in labels:
         dataset = GMRMemoryDataset(
             label=label,
-            num_samples=samples_per_label // 10,
+            num_samples=100,
             run_augment=False,
             cumulation_rate=args.cumulation_rate,
             root=args.root
@@ -191,50 +221,77 @@ def train_phase2(args):
     combined_validate_dataset = ConcatDataset(validate_datasets)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    base_model = GMRMemoryModel(output_dim=2).to(device)
+    base_model = GMRMemoryModelDualHead(output_dim=2).to(device)
     base_model.load_state_dict(torch.load(args.phase1_ckpt, map_location=device))
 
     batch_size = args.batch_size
     train_loader = DataLoader(combined_train_dataset, batch_size=batch_size, shuffle=True)
     validate_loader = DataLoader(combined_validate_dataset, batch_size=batch_size, shuffle=False)
 
-    model = GMRMemoryModelPTuning(base_model).to(device)
+    model = GMRMemoryModelAdapted(base_model).to(device)
     prompt_params = list(model.parameters())
-    print('Total trainable parameters in PTuning moddel:', sum(p.numel() for p in prompt_params if p.requires_grad))
+    print('Total trainable parameters in Adaption model:',
+          sum(p.numel() for p in prompt_params if p.requires_grad))
     print(model)
 
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(prompt_params, lr=1e-4, weight_decay=1e-5)
+    optimizer = optim.Adam(prompt_params, lr=1e-2, weight_decay=0)
 
-    for epoch in tqdm(range(1, args.num_epochs + 1), desc='Phase 2 (P-tuning) Training epochs'):
+    train_losses = []
+    train_r2s = []
+    val_losses = []
+    val_r2s = []
+
+    for epoch in tqdm(range(1, args.num_epochs + 1), desc='Phase 2 Training epochs'):
         model.train()
         epoch_train_loss = 0.0
         epoch_train_r2 = 0.0
+        total_train = 0
         train_preds = []
         train_targets = []
 
         for batch in train_loader:
             features = batch['feature'].to(device)
             targets = batch['target'].to(device)
-            targets = targets[:, -1, :].unsqueeze(2)    # [B, 3, 1]
+            targets = targets[:, -1, :].unsqueeze(3)    # [B, 2, new_out_dim, 1]
 
             optimizer.zero_grad()
-            outputs = model(features)
-            loss = criterion(outputs, targets)
+            outputs = model(features)                   # [B, 2, new_out_dim, 1]
+            
+            loss = gmr_loss_dualhead(outputs, targets, alpha=0.1)
             loss.backward()
             optimizer.step()
 
-            epoch_train_loss += loss.item() * features.size(0)
-            train_preds.append(outputs.detach().cpu().numpy())
-            train_targets.append(targets.detach().cpu().numpy())
+            current_batch_size = features.size(0)
+            epoch_train_loss += loss.item() * current_batch_size
+            total_train += current_batch_size
 
-        epoch_train_loss /= len(combined_train_dataset)
+            pred_time = outputs[:, 0, :, :]
+            pred_presence = outputs[:, 1, :, :]
+            pred_presence = torch.where(pred_presence < 0, -1, 1)  # convert prediction class to only -1 and 1
+            pred_signed_time = (pred_time * pred_presence).squeeze(2)
+
+            targets_time = targets[:, 0, :, :]
+            targets_presence = targets[:, 1, :, :]
+            signed_target = (targets_time * targets_presence).squeeze(2)
+
+            train_preds.append(pred_signed_time.detach().cpu().numpy())
+            train_targets.append(signed_target.detach().cpu().numpy())
+
+        # epoch train loss
+        epoch_train_loss /= total_train
+        
+        # epoch train r2
         train_preds = np.concatenate(train_preds, axis=0).flatten()
         train_targets = np.concatenate(train_targets, axis=0).flatten()
-        epoch_train_r2 = r2(train_targets, train_preds)
+        epoch_train_r2 = gmr_r2(train_targets, train_preds)
+
+        train_losses.append(epoch_train_loss)
+        train_r2s.append(epoch_train_r2)
 
         model.eval()
         epoch_val_loss = 0.0
+        epoch_val_r2 = 0.0
+        total_val = 0
         val_preds = []
         val_targets = []
 
@@ -243,25 +300,53 @@ def train_phase2(args):
                 features = batch['feature'].to(device)
                 targets = batch['target'].to(device)
                 targets = targets[:, -1, :].unsqueeze(2)
+
                 outputs = model(features)
-                loss = criterion(outputs, targets)
-                epoch_val_loss += loss.item() * features.size(0)
-                val_preds.append(outputs.cpu().numpy())
-                val_targets.append(targets.cpu().numpy())
+
+                loss = gmr_loss_dualhead(outputs, targets, alpha=5)
+                current_batch_size = features.size(0)
+                epoch_val_loss += loss.item() * current_batch_size
+                total_val += current_batch_size
+                
+                pred_time = outputs[:, 0, :, :]
+                pred_presence = outputs[:, 1, :, :]
+                pred_presence = torch.where(pred_presence < 0, -1, 1)  # convert prediction class to only -1 and 1
+                pred_signed_time = (pred_time * pred_presence).squeeze(2)
+
+                targets_time = targets[:, 0, :, :]
+                targets_presence = targets[:, 1, :, :]
+                signed_target = (targets_time * targets_presence).squeeze(2)
+
+                val_preds.append(pred_signed_time.detach().cpu().numpy())
+                val_targets.append(signed_target.detach().cpu().numpy())
         
+        # epoch validate loss
         epoch_val_loss /= len(combined_validate_dataset)
+        
+        # epoch validate r2
         val_preds = np.concatenate(val_preds, axis=0).flatten()
         val_targets = np.concatenate(val_targets, axis=0).flatten()
-        epoch_val_r2 = r2(val_targets, val_preds)
+        epoch_val_r2 = gmr_r2(val_targets, val_preds)
 
-        if epoch % 5 == 0 or epoch == args.num_epochs:
+        val_losses.append(epoch_val_loss)
+        val_r2s.append(epoch_val_r2)
+
+        if epoch % 1 == 0 or epoch == args.num_epochs:
             tqdm.write(
                 f'Phase 2 - Epoch {epoch}/{args.num_epochs}: '
                 f'Train Loss: {epoch_train_loss:.4f}, Train R2: {epoch_train_r2:.4f}, '
                 f'Validate Loss: {epoch_val_loss:.4f}, Validate R2: {epoch_val_r2:.4f}'
             )
     torch.save(model.state_dict(), args.phase2_ckpt)
-    print(f"Phase 2 p-tuning complete. Checkpoint saved to {args.phase2_ckpt}")
+    print(f'Phase 2 complete. Checkpoint saved to {args.phase2_ckpt}')
+
+    train_losses = np.array(train_losses)
+    train_r2s = np.array(train_r2s)
+    val_losses = np.array(val_losses)
+    val_r2s = np.array(val_r2s)
+    phase1_report = np.stack((train_losses, train_r2s, val_losses, val_r2s), axis=1)
+    np.save('phase2_report', phase1_report)
+    print('Report saved to phase2_report.npy')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train CNN model with GMRMemoryDataset')
@@ -278,6 +363,8 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
+    gmr_set_seeds(114514)
+
     if args.phase == 1:
         train_phase1(args)
     else:
