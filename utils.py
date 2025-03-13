@@ -1,6 +1,9 @@
 # utils.py
 
+import random
+
 import numpy as np
+import torch
 import torch.nn as nn
 
 KNOWN_CHANNELS = np.array([
@@ -30,7 +33,13 @@ KEY_FRAMES_DICT = {
     # 'ttssttssttssttssttss':     [14.15, 23.90, 50.70, 57.75, 80.25, 88.55, 131.30, 135.95, 213.80, 221.50, 261.20, 262.80, 301.60, 309.50, 395.75, 402.75, 464.05, 470.60, 501.25, 508.10],
 }
 
-def r2(y_true: np.ndarray, y_pred: np.ndarray):
+def gmr_set_seeds(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def gmr_r2(y_true: np.ndarray, y_pred: np.ndarray):
     """
     Compute the coefficient of determination R^2.
     """
@@ -38,7 +47,7 @@ def r2(y_true: np.ndarray, y_pred: np.ndarray):
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     return 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
 
-def compute_loss_dualhead(outputs, targets, alpha=1.0):
+def gmr_loss_dualhead(outputs, targets, alpha=1.0):
     """
     Compute the combined loss for the dual-head model output.
 
@@ -55,18 +64,20 @@ def compute_loss_dualhead(outputs, targets, alpha=1.0):
     # Extract predictions from the stacked output.
     pred_time = outputs[:, 0, :, :]         # [B, num_shapes, 1]
     pred_presence = outputs[:, 1, :, :]     # [B, num_shapes, 1]
+    # print(pred_time.shape)
 
     target_time = targets[:, 0, :, :]       # [B, num_shapes, 1]
     target_presence = targets[:, 1, :, :]   # [B, num_shapes, 1]
+    # print(target_time.shape)
     
     # Compute the mean squared error loss for accumulated time.
     criterion_time = nn.MSELoss()
-    mse_loss = criterion_time(pred_time, target_time)
+    time_loss = criterion_time(pred_time, target_time)
 
     # Compute the binary cross entropy loss for presence.
-    criterion_presence = nn.BCELoss()
-    bce_loss = criterion_presence(pred_presence, target_presence)
+    criterion_presence = nn.MSELoss()
+    class_loss = criterion_presence(pred_presence, target_presence)
     
     # Combine the losses with the weighting factor.
-    total_loss = mse_loss + alpha * bce_loss
+    total_loss = time_loss + alpha * class_loss
     return total_loss
