@@ -9,6 +9,7 @@ from scipy.interpolate import RegularGridInterpolator
 import torch
 from torch.utils.data import Dataset
 from utils import *
+import matplotlib.pyplot as plt
 
 class GMRMemoryDataset(Dataset):
     def __init__(self, 
@@ -29,10 +30,10 @@ class GMRMemoryDataset(Dataset):
         Initializes the dataset by loading the raw data, processing it, and generating samples.
 
         The following attributes are created:
-          - self.all_targets: The computed target array (after applying log1p).
-          - self.data: Sensor data with the time column removed and normalized.
-          - self.data_norm: Sensor data after a signed logarithmic transformation.
-          - self.data_interp: Data interpolated onto an 8x6 grid.
+          - self.signal: Sensor data with the time column removed and normalized.
+          - self.signal_norm: Sensor data after a signed logarithmic transformation.
+          - self.signal_interp: Data interpolated onto an 8x6 grid.
+          - self.accumulation_time: The computed accumulation time as target array (after applying log1p).
           - self.feature_samples: Final feature samples for training.
           - self.target_samples: Final target sequences for training.
 
@@ -51,12 +52,16 @@ class GMRMemoryDataset(Dataset):
           - cumulation_rate (float, optional): Rate at which target values increase between keyframes.
         """
         self.feature_samples, self.target_samples = None, None
+        
+        self.label = label
         self.run_augment = run_augment
         self.mirror_prob = mirror_prob
         self.noise_mean = noise_mean
         self.noise_std = noise_std
         self.random_low = random_low
         self.random_high = random_high
+
+        gmr_set_seeds(114514)
 
         self.load_data(label, cumulation_rate, root)
         self.feature_interpolate()
@@ -81,6 +86,11 @@ class GMRMemoryDataset(Dataset):
         """
         feature = torch.tensor(self.feature_samples[index], dtype=torch.float32)
         target = torch.tensor(self.target_samples[index], dtype=torch.float32)
+
+        # if the label does not contain 't', assume it only contains square and circle,
+        # so we return only the corresponding channels (columns 1 and 2)
+        # if 't' not in self.label:
+        #     target = target[..., 1:3]
         return {'feature': feature, 'target': target}
 
     def load_data(self, 
@@ -108,44 +118,59 @@ class GMRMemoryDataset(Dataset):
         timestamps = raw[:, 0] - timestamp_offset
         total_time = len(timestamps)
 
-        # Initialize target with zeros for three shapes (triangle, square, circle)
-        self.all_targets = np.zeros((total_time, 3), dtype=float)
+        # Initialize target array for three shapes (triangle, square, circle)
+        self.accumulation_time = np.zeros((total_time, 3), dtype=float)
+        self.accumulation_time_abs = np.zeros((total_time, 3), dtype=float)
+        self.presence_indicator = np.zeros((total_time, 3), dtype=float)
         key_frames = KEY_FRAMES_DICT.get(label)
         if key_frames is None:
             raise ValueError(f"Key frames for label '{label}' not found in KEY_FRAMES_DICT.")
         key_frames = [kf - timestamp_offset for kf in key_frames]  # offset adjustment
 
-        # Mapping for shape characters to target columns.
+        # Mapping of shape characters to target channels.
         shape_map = {'t': 0, 's': 1, 'c': 2}
-        shape_indices = {'t': [], 's': [], 'c': []}
 
-        # Determine order based on characters in label.
-        for i, shape in enumerate(label):
-            if shape in shape_map:
-                shape_indices[shape].append(i)
+        for shape, channel in shape_map.items():
+            events_for_shape = []
+            for i, ch in enumerate(label):
+                if ch == shape:
+                    events_for_shape.append(key_frames[i])
+            # Insert initial event at time 0
+            events = [0.0] + events_for_shape
+            # Append final event at final timestamp
+            events.append(timestamps[-1])
+            events.sort()
 
-        # Process start-end pairs for each shape.
-        for shape, indices in shape_indices.items():
-            shape_idx = shape_map[shape]
-            for j in range(0, len(indices), 2):
-                if j + 1 < len(indices):
-                    start_time = key_frames[indices[j]]
-                    end_time = key_frames[indices[j + 1]]
-                    start_idx = np.argwhere(timestamps == start_time).flatten()
-                    end_idx = np.argwhere(timestamps == end_time).flatten()
-                    if start_idx.size and end_idx.size:
-                        s = start_idx[0]
-                        e = end_idx[0]
-                        for k in range(s, e + 1):
-                            self.all_targets[k, shape_idx] = (k - s) * rate
-        self.all_targets = np.log1p(self.all_targets)
+            # Process each segment
+            # even segments are release, odd segments are placement
+            for seg in range(len(events) - 1):
+                start_time = events[seg]
+                end_time = events[seg + 1]
+                # Find the starting and ending indices in the timestamps array
+                s = np.searchsorted(timestamps, start_time)
+                e = np.searchsorted(timestamps, end_time)
+                # Determine accumulation direction
+                seg_sign = -1 if seg % 2 == 0 else 1
+                # for each time index in the segment, assign a linearly changing target
+                for k in range(s, e):
+                    self.accumulation_time[k, channel] = seg_sign * ((k - s) * rate)
+                    self.accumulation_time_abs[k, channel] = (k - s) * rate
+                    self.presence_indicator[k, channel] = seg_sign
+                # ensure an abrupt reset at the event time
+                if s < total_time:
+                    self.accumulation_time[s, channel] = 0
+
+        # Apply a signed logarithmic transformation to targets so that both positive
+        # and negative values are compressed appropriately.
+        self.accumulation_time = np.sign(self.accumulation_time) * np.log1p(np.abs(self.accumulation_time))
+        self.accumulation_time_abs = np.log1p(self.accumulation_time_abs)
 
         # Remove the time column and normalize sensor data.
-        self.data = raw[:, 1:]
-        for i in range(self.data.shape[1]):
-            self.data[:, i] -= self.data[0, i]
-        # Apply a signed logarithmic transformation.
-        self.data_norm = np.sign(self.data) * np.log1p(np.abs(self.data))
+        self.signal = raw[:, 1:]
+        for i in range(self.signal.shape[1]):
+            self.signal[:, i] -= self.signal[0, i]
+        # Apply a signed logarithmic transformation to sensor data.
+        self.signal_norm = np.sign(self.signal) * np.log1p(np.abs(self.signal))
 
     def feature_interpolate(self):
         """
@@ -160,12 +185,12 @@ class GMRMemoryDataset(Dataset):
         Y = np.arange(6)
         X, Y = np.meshgrid(X, Y)
         interp_results = []
-        for t in range(self.data_norm.shape[0]):
-            interp_func = CloughTocher2DInterpolator(list(zip(x, y)), self.data_norm[t, :])
+        for t in range(self.signal_norm.shape[0]):
+            interp_func = CloughTocher2DInterpolator(list(zip(x, y)), self.signal_norm[t, :])
             Z = interp_func(X, Y)
             Z = np.nan_to_num(Z, nan=0)
             interp_results.append(Z)
-        self.data_interp = np.stack(interp_results, axis=0)  # Shape: (total_time, 6, 8)
+        self.signal_interp = np.stack(interp_results, axis=0)  # Shape: (total_time, 6, 8)
 
     def feature_augment(self, feature_sample):
         """
@@ -257,8 +282,11 @@ class GMRMemoryDataset(Dataset):
             num_samples (int): Number of random samples to generate.
             memory_length (int): Number of previous timesteps to include in each target sample.
         """
-        downsampled_features = self.data_interp[::downsample_factor, ...]
-        downsampled_targets = self.all_targets[::downsample_factor, ...]
+        downsampled_features = self.signal_interp[::downsample_factor, ...]
+        # NOTE: Now use two different targets instead of one
+        downsampled_targets = np.stack((self.accumulation_time_abs[::downsample_factor, ...],
+                                        self.presence_indicator[::downsample_factor, ...]),
+                                        axis=1)
         total_downsampled = downsampled_features.shape[0]
         if total_downsampled < memory_length:
             raise ValueError("Downsampled dataset length is shorter than the selected memory length.")
@@ -287,9 +315,9 @@ class GMRMemoryDataset(Dataset):
             
             feature_sample_list.append(feature_sample)
             target_sample_list.append(target_sample)
-        self.feature_samples = np.stack(feature_sample_list, axis=0)                        # Shape: (num_samples, 6, 8)
-        self.target_samples = np.stack(target_sample_list, axis=0)                          # Shape: (num_samples, memory_length, 3)
-        
+        self.feature_samples = np.stack(feature_sample_list, axis=0)    # Shape: (num_samples, 6, 8)
+        self.target_samples = np.stack(target_sample_list, axis=0)      # Shape: (num_samples, memory_length, 2, 3)
+
         # for evaluation
         if self.run_augment:
             self.original_feature_samples = np.stack(original_feature_sample_list, axis=0)  # Shape: (num_samples, 6, 8)
@@ -301,3 +329,9 @@ class GMRMemoryDataset(Dataset):
     
     def get_augment_tool_samples(self):
         return {'gaussian': self.gaussian_feature_samples, 'offset': self.offset_feature_samples}
+    
+if __name__ == '__main__':
+    dataset = GMRMemoryDataset('sccs', num_samples=10)
+    plt.plot(dataset.accumulation_time_abs)
+    plt.plot(dataset.presence_indicator)
+    plt.show()
