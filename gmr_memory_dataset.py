@@ -61,6 +61,8 @@ class GMRMemoryDataset(Dataset):
         self.random_low = random_low
         self.random_high = random_high
 
+        gmr_set_seeds(114514)
+
         self.load_data(label, cumulation_rate, root)
         self.feature_interpolate()
         self.generate_samples(downsample_factor, num_samples, memory_length)
@@ -87,8 +89,8 @@ class GMRMemoryDataset(Dataset):
 
         # if the label does not contain 't', assume it only contains square and circle,
         # so we return only the corresponding channels (columns 1 and 2)
-        if 't' not in self.label:
-            target = target[..., 1:3]
+        # if 't' not in self.label:
+        #     target = target[..., 1:3]
         return {'feature': feature, 'target': target}
 
     def load_data(self, 
@@ -333,5 +335,3 @@ if __name__ == '__main__':
     plt.plot(dataset.accumulation_time_abs)
     plt.plot(dataset.presence_indicator)
     plt.show()
-
-    print(dataset.target_samples[..., 1:3])
