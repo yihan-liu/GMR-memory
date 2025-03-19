@@ -16,6 +16,7 @@ class GMRMemoryDataset(Dataset):
     def __init__(self, 
                  label: str,
                  root: str='./dataset/',
+                 seed: int=114514,
                  num_samples: int=1000,
                  run_augment: bool=True,
                  mirror_prob: float=0.2,
@@ -41,6 +42,7 @@ class GMRMemoryDataset(Dataset):
         Parameters:
           - label (str): Used for both the filename and the keyframe order (e.g., "tsc").
           - root (str, optional): Directory where the raw TXT file is located.
+          - seed (int, optional): Random seed for augmentation.
           - num_samples (int, optional): Number of random samples to generate.
           - run_augment (bool, optional): Decide if augment is needed, default to True.
           - mirror_prob (float, optional): Probability of applying the horizontal flip. Default is 0.2.
@@ -62,7 +64,7 @@ class GMRMemoryDataset(Dataset):
         self.random_low = random_low
         self.random_high = random_high
 
-        gmr_set_seeds(114514)
+        gmr_set_seeds(seed)
 
         self.load_data(label, cumulation_rate, root)
         self.feature_interpolate()
