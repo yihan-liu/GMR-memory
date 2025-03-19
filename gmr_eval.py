@@ -7,48 +7,9 @@ import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
-from gmr_memory_dataset import GMRMemoryDataset
-from model import GMRMemoryModel, GMRMemoryModelDualHead, GMRMemoryModelPTuning, GMRMemoryModelAdapted
-from utils import *
-
-def gmr_show_sample(args):
-    labels = list(KEY_FRAMES_DICT.keys())
-    print(f'Using labels: {labels}')
-
-    num_labels = len(labels)
-    samples_per_label = args.num_total_samples // num_labels
-    print(f'Allocating {samples_per_label} samples per label (Total: {samples_per_label * num_labels})')
-
-    datasets = []
-    for label in labels:
-        dataset = GMRMemoryDataset(
-            label=label,
-            num_samples=samples_per_label,
-            run_augment=True,
-            cumulation_rate=args.cumulation_rate,
-            root=args.root
-        )
-        datasets.append(dataset)
-
-    original_feature_samples = datasets[0].get_original_samples().get('features')
-    gaussian_feature_samples = datasets[0].get_augment_tool_samples().get('gaussian')
-    offset_feature_samples = datasets[0].get_augment_tool_samples().get('offset')
-
-    augmented_feature_samples = datasets[0].feature_samples
-
-    _, axes = plt.subplots(nrows=2, ncols=2)
-    im0 = axes[0, 0].imshow(original_feature_samples[0, ...])
-    plt.colorbar(im0, ax=axes[0, 0])
-
-    im1 = axes[0, 1].imshow(augmented_feature_samples[0, ...])
-    plt.colorbar(im1, ax=axes[0, 1])
-    
-    im2 = axes[1, 0].imshow(gaussian_feature_samples[0, ...])
-    plt.colorbar(im2, ax=axes[1, 0])
-
-    im3 = axes[1, 1].imshow(offset_feature_samples[0, ...])
-    plt.colorbar(im3, ax=axes[1, 1])
-    plt.show()
+from gmr.gmr_memory_dataset import GMRMemoryDataset
+from gmr.model import GMRMemoryModelDualHead
+from gmr.utils import *
 
 def gmr_predict(args):
     """
@@ -77,15 +38,16 @@ def gmr_predict(args):
     dataloader = DataLoader(original_data, batch_size=64, shuffle=False)
 
     # Instantiate the base model (phase 1 outputs 2 channels) and load the checkpoint.
-    base_model = GMRMemoryModelDualHead(output_dim=3)
-    if not os.path.exists(args.phase1_ckpt):
-        raise FileNotFoundError(f"Phase 1 checkpoint not found at {args.phase1_ckpt}")
-    base_model.load_state_dict(torch.load(args.phase1_ckpt, map_location=device))
-
     if args.phase == 1:
-        model = base_model
-    else:
-        model = GMRMemoryModelAdapted(base_model)
+        model = GMRMemoryModelDualHead(output_dim=2)
+        if not os.path.exists(args.phase1_ckpt):
+            raise FileNotFoundError(f"Phase 1 checkpoint not found at {args.phase1_ckpt}")
+        model.load_state_dict(torch.load(args.phase1_ckpt, map_location=device))
+    elif args.phase == 2:
+        model = GMRMemoryModelDualHead(output_dim=3)
+        if not os.path.exists(args.phase2_ckpt):
+            raise FileNotFoundError(f"Phase 2 checkpoint not found at {args.phase2_ckpt}")
+        model.load_state_dict(torch.load(args.phase2_ckpt, map_location=device))
 
     model.to(device)
     model.eval()
@@ -110,6 +72,10 @@ def gmr_predict(args):
     pred_presences = np.concatenate(pred_presences, axis=0)
     predictions = np.concatenate(predictions, axis=0)
 
+    np.savez(f'results/{label}_original_prediction',
+             original_data=original_data,
+             original_targets=original_targets)
+
     plt.plot(original_targets)
     # plt.plot(pred_times)
     # plt.plot(pred_presences)
@@ -120,7 +86,7 @@ def gmr_predict(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GMRMemoryModel Evaluation')
-    parser.add_argument('-n', '--num-total-samples', type=int, default=10000, help='Total number of samples to use across all labels')
+    parser.add_argument('-n', '--num-total-samples', type=int, default=20, help='Total number of samples to use across all labels')
     parser.add_argument('-c', '--cumulation-rate', type=float, default=0.001, help='Cumulation rate for target values')
     parser.add_argument('--root', type=str, default='./dataset/', help='Root directory for raw data files')
     parser.add_argument('--downsample-factor', type=int, default=1, help='Downsample factor')
@@ -128,9 +94,8 @@ if __name__ == '__main__':
 
     parser.add_argument('-l', '--label', type=str, help='Label to select original dataset for evaluation.')
     parser.add_argument('--phase', type=int, choices=[1, 2], default=1, help='Training phase: 1 for CS-only, 2 for p-tuning')
-    parser.add_argument('--phase1-ckpt', type=str, default='phase1_base_model.pth', help='Checkpoint path for phase 1')
-    parser.add_argument('--phase2-ckpt', type=str, default='phase2_ptuning_model.pth', help='Checkpoint path for phase 2')
+    parser.add_argument('--phase1-ckpt', type=str, default='phase1.pth', help='Checkpoint path for phase 1')
+    parser.add_argument('--phase2-ckpt', type=str, default='phase2.pth', help='Checkpoint path for phase 2')
     
     args = parser.parse_args()
-    # gmr_show_sample(args)
     gmr_predict(args)

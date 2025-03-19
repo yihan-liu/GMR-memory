@@ -10,9 +10,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, ConcatDataset
 from tqdm import tqdm
 
-from gmr_memory_dataset import GMRMemoryDataset
-from model import GMRMemoryModelDualHead, GMRMemoryModelAdapted
-from utils import *
+from gmr.gmr_memory_dataset import GMRMemoryDataset
+from gmr.model import GMRMemoryModelDualHead, GMRMemoryModelAdapted
+from gmr.utils import *
 
 def train_phase1(args):
     """
@@ -20,8 +20,8 @@ def train_phase1(args):
     Labels (e.g. "cscs" and "sccs") do not contain triangle,
     so the dataset returns target sequences with only 2 channels.
     """
-    # labels = [k for k in KEY_FRAMES_DICT.keys() if 't' not in k] 
-    labels = KEY_FRAMES_DICT.keys()
+    labels = [k for k in KEY_FRAMES_DICT.keys() if 't' not in k] 
+    # labels = KEY_FRAMES_DICT.keys()
     print(f'Phase 1 trianing on labels: {labels}')
 
     num_labels = len(labels)
@@ -61,7 +61,7 @@ def train_phase1(args):
     validate_loader = DataLoader(combined_validate_dataset, batch_size=batch_size, shuffle=False)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = GMRMemoryModelDualHead(output_dim=3).to(device)  # NOTE: use output dim 3 now
+    model = GMRMemoryModelDualHead(output_dim=2).to(device)
     print("Total model parameters:", sum(p.numel() for p in model.parameters()))
     print(model)
 
@@ -221,20 +221,21 @@ def train_phase2(args):
     combined_validate_dataset = ConcatDataset(validate_datasets)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    base_model = GMRMemoryModelDualHead(output_dim=2).to(device)
-    base_model.load_state_dict(torch.load(args.phase1_ckpt, map_location=device))
+    # base_model = GMRMemoryModelDualHead(output_dim=2).to(device)
+    # base_model.load_state_dict(torch.load(args.phase1_ckpt, map_location=device))
 
     batch_size = args.batch_size
     train_loader = DataLoader(combined_train_dataset, batch_size=batch_size, shuffle=True)
     validate_loader = DataLoader(combined_validate_dataset, batch_size=batch_size, shuffle=False)
 
-    model = GMRMemoryModelAdapted(base_model).to(device)
+    # model = GMRMemoryModelAdapted(base_model).to(device)
+    model = GMRMemoryModelDualHead(output_dim=3).to(device)
     prompt_params = list(model.parameters())
     print('Total trainable parameters in Adaption model:',
           sum(p.numel() for p in prompt_params if p.requires_grad))
     print(model)
 
-    optimizer = optim.Adam(prompt_params, lr=1e-2, weight_decay=0)
+    optimizer = optim.Adam(prompt_params, lr=1e-5, weight_decay=1e-4)
 
     train_losses = []
     train_r2s = []
@@ -257,7 +258,7 @@ def train_phase2(args):
             optimizer.zero_grad()
             outputs = model(features)                   # [B, 2, new_out_dim, 1]
             
-            loss = gmr_loss_dualhead(outputs, targets, alpha=0.1)
+            loss = gmr_loss_dualhead(outputs, targets, alpha=1.5)
             loss.backward()
             optimizer.step()
 
@@ -299,11 +300,11 @@ def train_phase2(args):
             for batch in validate_loader:
                 features = batch['feature'].to(device)
                 targets = batch['target'].to(device)
-                targets = targets[:, -1, :].unsqueeze(2)
+                targets = targets[:, -1, :].unsqueeze(3)
 
                 outputs = model(features)
 
-                loss = gmr_loss_dualhead(outputs, targets, alpha=5)
+                loss = gmr_loss_dualhead(outputs, targets, alpha=1.5)
                 current_batch_size = features.size(0)
                 epoch_val_loss += loss.item() * current_batch_size
                 total_val += current_batch_size
@@ -321,7 +322,7 @@ def train_phase2(args):
                 val_targets.append(signed_target.detach().cpu().numpy())
         
         # epoch validate loss
-        epoch_val_loss /= len(combined_validate_dataset)
+        epoch_val_loss /= total_val
         
         # epoch validate r2
         val_preds = np.concatenate(val_preds, axis=0).flatten()
@@ -357,9 +358,9 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=str, default='./dataset/', help='Root directory for raw data files')
     parser.add_argument('--downsample-factor', type=int, default=1, help='Downsample factor')
     parser.add_argument('--memory-length', type=int, default=1, help='Number of timesteps in each target sample')
-    parser.add_argument('--phase', type=int, choices=[1, 2], default=1, help='Training phase: 1 for CS-only, 2 for p-tuning')
-    parser.add_argument('--phase1-ckpt', type=str, default='phase1_base_model.pth', help='Checkpoint path for phase 1')
-    parser.add_argument('--phase2-ckpt', type=str, default='phase2_ptuning_model.pth', help='Checkpoint path for phase 2')
+    parser.add_argument('--phase', type=int, choices=[1, 2], default=1, help='Training phase: 1 for CS-only, 2 for T')
+    parser.add_argument('--phase1-ckpt', type=str, default='phase1.pth', help='Checkpoint path for phase 1')
+    parser.add_argument('--phase2-ckpt', type=str, default='phase2.pth', help='Checkpoint path for phase 2')
     
     args = parser.parse_args()
     
