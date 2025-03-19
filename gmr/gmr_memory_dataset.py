@@ -244,8 +244,9 @@ class GMRMemoryDataset(Dataset):
         sample = sample + gaussian_noise
 
         # Add base plane offset
-        p1 = np.random.uniform(self.random_low, self.random_high)
-        p2 = np.random.uniform(self.random_low, self.random_high)
+        midpoint = (self.random_high + self.random_low) / 2.0
+        p1 = np.random.uniform(self.random_low, midpoint)
+        p2 = np.random.uniform(midpoint, self.random_high)
         pm = (p1 + p2) / 2.0
         corner_data = np.array([
             [p1, pm],
