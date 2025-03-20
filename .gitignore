@@ -1,9 +1,21 @@
+*.DS_Store*
 __pycache__/
 .venv/
 .vscode/
 
+# data
 *.txt
 *.zip
 *.npy
+*.npz
+*.pt
+*.pth
 
-*.DS_Store*
+# uv
+.python-version
+pyproject.toml
+
+# image
+*.svg
+*.png
+*.ai
