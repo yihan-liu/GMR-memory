@@ -112,7 +112,7 @@ def compute_cumulative_scores(prediction,
 
 def plot_3d_cumulative_scores_with_time(timestamps, scores,
                                         size_min=5, size_max=500,
-                                        downsample=1, cmap_name='magma_r'):
+                                        downsample=1):
     """
     Visualize the cumulative score history for three shapes in a 3D scatter plot.
     Marker size and transparency (alpha) increase as the timestamp approaches t=0.

@@ -1,4 +1,3 @@
-
 import os
 import sys
 from pathlib import Path
@@ -15,7 +14,7 @@ from gmr.model import GMRMemoryModelDualHead
 from gmr.utils import *
 
 def gmr_combine_all_predictions(labels, shape):
-    """_summary_
+    """_summary_,
 
     Args:
         labels (list): List of all used dataset labels.
@@ -400,4 +399,5 @@ if __name__ == '__main__':
         plt.tick_params(left=False, bottom=False)
 
     plt.subplots_adjust(top=0.85, right=0.85)
+    plt.savefig(f'results/performances/{selected_shape}.svg', bbox_inches='tight', dpi=600, transparent=True)
     plt.show()

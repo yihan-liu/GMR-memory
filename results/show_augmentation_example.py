@@ -11,7 +11,6 @@ from cmap import Colormap
 import torch
 
 from gmr.gmr_memory_dataset import GMRMemoryDataset
-
 from gmr.utils import *
 
 def gmr_show_sample(args):
